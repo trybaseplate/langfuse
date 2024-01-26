@@ -10,13 +10,15 @@ import { prisma } from "@/src/server/db";
 import { verifyPassword } from "@/src/features/auth/lib/emailPassword";
 import { parseFlags } from "@/src/features/feature-flags/utils";
 import { env } from "@/src/env.mjs";
+import { createProjectMembershipsOnSignup } from "@/src/features/auth/lib/createProjectMembershipsOnSignup";
+import { type Adapter } from "next-auth/adapters";
 
 // Providers
 import { type Provider } from "next-auth/providers";
 import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
 import GitHubProvider from "next-auth/providers/github";
-import { type Adapter } from "next-auth/adapters";
+import AzureADProvider from "next-auth/providers/azure-ad";
 
 // Use secure cookies on https hostnames, exception for Vercel which sets NEXTAUTH_URL without the protocol
 const useSecureCookies =
@@ -52,6 +54,10 @@ const providers: Provider[] = [
     },
     async authorize(credentials, _req) {
       if (!credentials) throw new Error("No credentials");
+      if (env.AUTH_DISABLE_USERNAME_PASSWORD === "true")
+        throw new Error(
+          "Sign in with email and password is disabled for this instance. Please use SSO.",
+        );
 
       const blockedDomains =
         env.AUTH_DOMAINS_WITH_SSO_ENFORCEMENT?.split(",") ?? [];
@@ -110,6 +116,19 @@ if (env.AUTH_GITHUB_CLIENT_ID && env.AUTH_GITHUB_CLIENT_SECRET)
     }),
   );
 
+if (
+  env.AUTH_AZURE_AD_CLIENT_ID &&
+  env.AUTH_AZURE_AD_CLIENT_SECRET &&
+  env.AUTH_AZURE_AD_TENANT_ID
+)
+  providers.push(
+    AzureADProvider({
+      clientId: env.AUTH_AZURE_AD_CLIENT_ID,
+      clientSecret: env.AUTH_AZURE_AD_CLIENT_SECRET,
+      tenantId: env.AUTH_AZURE_AD_TENANT_ID,
+    }),
+  );
+
 // Extend Prisma Adapter
 const prismaAdapter = PrismaAdapter(prisma);
 const extendedPrismaAdapter: Adapter = {
@@ -120,28 +139,16 @@ const extendedPrismaAdapter: Adapter = {
     if (env.NEXT_PUBLIC_SIGN_UP_DISABLED === "true") {
       throw new Error("Sign up is disabled.");
     }
+    if (!profile.email) {
+      throw new Error(
+        "Cannot create db user as login profile does not contain an email: " +
+          JSON.stringify(profile),
+      );
+    }
 
     const user = await prismaAdapter.createUser(profile);
 
-    // Demo project access
-    const demoProjectId = env.NEXT_PUBLIC_DEMO_PROJECT_ID
-      ? (
-          await prisma.project.findUnique({
-            where: {
-              id: env.NEXT_PUBLIC_DEMO_PROJECT_ID,
-            },
-          })
-        )?.id
-      : undefined;
-    if (demoProjectId !== undefined) {
-      await prisma.membership.create({
-        data: {
-          projectId: demoProjectId,
-          userId: user.id,
-          role: "VIEWER",
-        },
-      });
-    }
+    await createProjectMembershipsOnSignup(user);
 
     return user;
   },
@@ -204,6 +211,11 @@ export const authOptions: NextAuthOptions = {
   providers,
   pages: {
     signIn: "/auth/sign-in",
+    ...(env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION
+      ? {
+          newUser: "/onboarding",
+        }
+      : {}),
   },
   cookies: {
     sessionToken: {
@@ -235,7 +247,8 @@ export const authOptions: NextAuthOptions = {
     createUser: async ({ user }) => {
       if (
         env.LANGFUSE_NEW_USER_SIGNUP_WEBHOOK &&
-        env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION
+        env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION &&
+        env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION !== "STAGING"
       ) {
         await fetch(env.LANGFUSE_NEW_USER_SIGNUP_WEBHOOK, {
           method: "POST",

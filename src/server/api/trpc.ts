@@ -36,7 +36,7 @@ type CreateContextOptions = {
  *
  * @see https://create.t3.gg/en/usage/trpc#-serverapitrpcts
  */
-const createInnerTRPCContext = (opts: CreateContextOptions) => {
+export const createInnerTRPCContext = (opts: CreateContextOptions) => {
   return {
     session: opts.session,
     prisma,
@@ -70,6 +70,9 @@ export const createTRPCContext = async (opts: CreateNextContextOptions) => {
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import { ZodError } from "zod";
+import { setUpSuperjson } from "@/src/utils/superjson";
+
+setUpSuperjson();
 
 const t = initTRPC.context<typeof createTRPCContext>().create({
   transformer: superjson,
@@ -154,7 +157,7 @@ const enforceUserIsAuthedAndProjectMember = t.middleware(
 
     // check that the user is a member of this project
     const projectId = result.data.projectId;
-    const sessionProject = ctx.session?.user.projects?.find(
+    const sessionProject = ctx.session.user.projects.find(
       ({ id }) => id === projectId,
     );
 
@@ -218,7 +221,7 @@ const enforceTraceAccess = t.middleware(async ({ ctx, rawInput, next }) => {
       message: "Trace not found",
     });
 
-  const sessionProject = ctx.session?.user?.projects?.find(
+  const sessionProject = ctx.session?.user?.projects.find(
     ({ id }) => id === trace.projectId,
   );
 
@@ -241,3 +244,71 @@ const enforceTraceAccess = t.middleware(async ({ ctx, rawInput, next }) => {
 });
 
 export const protectedGetTraceProcedure = t.procedure.use(enforceTraceAccess);
+
+/*
+ * Protect session-level getter routes.
+ * - Users need to be member of the project to access the trace.
+ * - Alternatively, the trace needs to be public.
+ */
+
+const inputSessionSchema = z.object({
+  sessionId: z.string(),
+  projectId: z.string(),
+});
+
+const enforceSessionAccess = t.middleware(async ({ ctx, rawInput, next }) => {
+  const result = inputSessionSchema.safeParse(rawInput);
+  if (!result.success)
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Invalid input, sessionId is required",
+    });
+
+  const { sessionId, projectId } = result.data;
+
+  const session = await prisma.traceSession.findFirst({
+    where: {
+      id: sessionId,
+      projectId,
+    },
+    select: {
+      public: true,
+    },
+  });
+
+  if (!session)
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "Session not found",
+    });
+
+  const userSessionProject = ctx.session?.user?.projects.find(
+    ({ id }) => id === projectId,
+  );
+
+  if (
+    !session.public &&
+    !userSessionProject &&
+    ctx.session?.user?.admin !== true
+  )
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message:
+        "User is not a member of this project and this session is not public",
+    });
+
+  return next({
+    ctx: {
+      session: {
+        ...ctx.session,
+        projectRole:
+          ctx.session?.user?.admin === true
+            ? "ADMIN"
+            : userSessionProject?.role,
+      },
+    },
+  });
+});
+
+export const protectedGetSessionProcedure =
+  t.procedure.use(enforceSessionAccess);

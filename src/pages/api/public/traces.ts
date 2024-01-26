@@ -10,16 +10,29 @@ import {
   handleBatchResultLegacy,
 } from "@/src/pages/api/public/ingestion";
 import {
-  TraceSchema,
+  TraceBody,
   eventTypes,
 } from "@/src/features/public-api/server/ingestion-api-schema";
 import { v4 } from "uuid";
 import { telemetry } from "@/src/features/telemetry";
+import { orderByToPrismaSql } from "@/src/features/orderBy/server/orderByToPrisma";
+import { tracesTableCols } from "@/src/server/api/definitions/tracesTable";
+import { orderBy } from "@/src/server/api/interfaces/orderBy";
 
 const GetTracesSchema = z.object({
   ...paginationZod,
   userId: z.string().nullish(),
   name: z.string().nullish(),
+  tags: z.union([z.array(z.string()), z.string()]).nullish(),
+  orderBy: z
+    .string() // orderBy=timestamp.asc
+    .nullish()
+    .transform((v) => {
+      if (!v) return null;
+      const [column, order] = v.split(".");
+      return { column, order: order?.toUpperCase() };
+    })
+    .pipe(orderBy.nullish()),
 });
 
 export default async function handler(
@@ -52,7 +65,7 @@ export default async function handler(
           message: "Access denied",
         });
 
-      const body = TraceSchema.parse(req.body);
+      const body = TraceBody.parse(req.body);
 
       await telemetry();
 
@@ -63,7 +76,7 @@ export default async function handler(
         body: body,
       };
 
-      const result = await handleBatch([event], req, authCheck);
+      const result = await handleBatch([event], {}, req, authCheck);
       handleBatchResultLegacy(result.errors, result.results, res);
     } else if (req.method === "GET") {
       if (authCheck.scope.accessLevel !== "all") {
@@ -76,13 +89,29 @@ export default async function handler(
       const obj = GetTracesSchema.parse(req.query); // uses query and not body
 
       const skipValue = (obj.page - 1) * obj.limit;
-      const userCondition = Prisma.sql`AND t."user_id" = ${obj.userId}`;
-      const nameCondition = Prisma.sql`AND t."name" = ${obj.name}`;
+      const userCondition = obj.userId
+        ? Prisma.sql`AND t."user_id" = ${obj.userId}`
+        : Prisma.empty;
+      const nameCondition = obj.name
+        ? Prisma.sql`AND t."name" = ${obj.name}`
+        : Prisma.empty;
+      const tagsCondition = obj.tags
+        ? Prisma.sql`AND ARRAY[${Prisma.join(
+            (Array.isArray(obj.tags) ? obj.tags : [obj.tags]).map(
+              (v) => Prisma.sql`${v}`,
+            ),
+            ", ",
+          )}] <@ t."tags"`
+        : Prisma.empty;
 
-      const [traces, totalItems] = await Promise.all([
-        prisma.$queryRaw<
-          Array<Trace & { observations: string[]; scores: string[] }>
-        >(Prisma.sql`
+      const orderByCondition = orderByToPrismaSql(
+        obj.orderBy ?? null,
+        tracesTableCols,
+      );
+
+      const traces = await prisma.$queryRaw<
+        Array<Trace & { observations: string[]; scores: string[] }>
+      >(Prisma.sql`
           SELECT
             t.id,
             t.timestamp,
@@ -93,27 +122,27 @@ export default async function handler(
             t.user_id as "userId",
             t.release,
             t.version,
+            t.tags,
             array_remove(array_agg(o.id), NULL) AS "observations",
             array_remove(array_agg(s.id), NULL) AS "scores"
           FROM "traces" AS t
-          LEFT JOIN "observations" AS o ON t.id = o.trace_id
+          LEFT JOIN "observations" AS o ON t.id = o.trace_id AND o.project_id = ${authCheck.scope.projectId}
           LEFT JOIN "scores" AS s ON t.id = s.trace_id
           WHERE t.project_id = ${authCheck.scope.projectId}
-          AND o.project_id = ${authCheck.scope.projectId}
-          ${obj.userId ? userCondition : Prisma.empty}
-          ${obj.name ? nameCondition : Prisma.empty}
+          ${userCondition}
+          ${nameCondition}
+          ${tagsCondition}
           GROUP BY t.id
-          ORDER BY t."timestamp" DESC
+          ${orderByCondition}
           LIMIT ${obj.limit} OFFSET ${skipValue}
-          `),
-        prisma.trace.count({
-          where: {
-            projectId: authCheck.scope.projectId,
-            name: obj.name ?? undefined,
-            userId: obj.userId ?? undefined,
-          },
-        }),
-      ]);
+          `);
+      const totalItems = await prisma.trace.count({
+        where: {
+          projectId: authCheck.scope.projectId,
+          name: obj.name ?? undefined,
+          userId: obj.userId ?? undefined,
+        },
+      });
 
       return res.status(200).json({
         data: traces,

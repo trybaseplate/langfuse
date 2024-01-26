@@ -3,7 +3,6 @@ import TableLink from "@/src/components/table/table-link";
 import { NewDatasetItemButton } from "@/src/features/datasets/components/NewDatasetItemButton";
 import { api } from "@/src/utils/api";
 import { type RouterOutput } from "@/src/utils/types";
-import { type ColumnDef } from "@tanstack/react-table";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -15,6 +14,9 @@ import { Archive, MoreVertical } from "lucide-react";
 import { Button } from "@/src/components/ui/button";
 import { DatasetStatus, type DatasetItem } from "@prisma/client";
 import { cn } from "@/src/utils/tailwind";
+import { type LangfuseColumnDef } from "@/src/components/table/types";
+import { useDetailPageLists } from "@/src/features/navigate-detail-pages/context";
+import { useEffect } from "react";
 
 type RowData = {
   id: string;
@@ -31,17 +33,28 @@ export function DatasetItemsTable({
   projectId: string;
   datasetId: string;
 }) {
-  const utils = api.useContext();
+  const { setDetailPageList } = useDetailPageLists();
+  const utils = api.useUtils();
   const items = api.datasets.itemsByDatasetId.useQuery({
     projectId,
     datasetId,
   });
 
+  useEffect(() => {
+    if (items.isSuccess) {
+      setDetailPageList(
+        "datasetItems",
+        items.data.map((t) => t.id),
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items.isSuccess, items.data]);
+
   const mutUpdate = api.datasets.updateDatasetItem.useMutation({
     onSuccess: () => utils.datasets.invalidate(),
   });
 
-  const columns: ColumnDef<RowData>[] = [
+  const columns: LangfuseColumnDef<RowData>[] = [
     {
       accessorKey: "id",
       header: "Item id",
@@ -156,16 +169,16 @@ export function DatasetItemsTable({
           items.isLoading
             ? { isLoading: true, isError: false }
             : items.isError
-            ? {
-                isLoading: false,
-                isError: true,
-                error: items.error.message,
-              }
-            : {
-                isLoading: false,
-                isError: false,
-                data: items.data?.map((t) => convertToTableRow(t)),
-              }
+              ? {
+                  isLoading: false,
+                  isError: true,
+                  error: items.error.message,
+                }
+              : {
+                  isLoading: false,
+                  isError: false,
+                  data: items.data.map((t) => convertToTableRow(t)),
+                }
         }
       />
       <NewDatasetItemButton

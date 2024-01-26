@@ -104,7 +104,7 @@ function DeleteApiKeyButton(props: { projectId: string; apiKeyId: string }) {
     scope: "apiKeys:delete",
   });
 
-  const utils = api.useContext();
+  const utils = api.useUtils();
   const mutDeleteApiKey = api.apiKeys.delete.useMutation({
     onSuccess: () => utils.apiKeys.invalidate(),
   });
@@ -115,7 +115,7 @@ function DeleteApiKeyButton(props: { projectId: string; apiKeyId: string }) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="ghost" size="xs">
+        <Button variant="ghost" size="icon">
           <TrashIcon className="h-4 w-4" />
         </Button>
       </DialogTrigger>

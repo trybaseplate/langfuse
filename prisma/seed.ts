@@ -53,6 +53,25 @@ async function main() {
     },
   });
 
+  const prompt = await prisma.prompt.upsert({
+    where: {
+      projectId_name_version: {
+        projectId: seedProjectId,
+        name: "summary-prompt",
+        version: 1,
+      },
+    },
+    create: {
+      name: "summary-prompt",
+      project: { connect: { id: seedProjectId } },
+      prompt: "prompt {{variable}} {{anotherVariable}}",
+      isActive: true,
+      version: 1,
+      createdBy: "user-1",
+    },
+    update: {},
+  });
+
   const seedApiKey = {
     id: "seed-api-key",
     secret: process.env.SEED_SECRET_KEY ?? "sk-lf-1234567890",
@@ -79,9 +98,9 @@ async function main() {
 
   // Do not run the following for local docker compose setup
   if (environment === "examples") {
-    const project2 = await prisma.project.create({
-      data: {
-        id: "239ad00f-562f-411d-af14-831c75ddd875",
+    const project2 = await prisma.project.upsert({
+      where: { id: "239ad00f-562f-411d-af14-831c75ddd875" },
+      create: {
         name: "demo-app",
         apiKeys: {
           create: [
@@ -100,22 +119,32 @@ async function main() {
           },
         },
       },
+      update: {},
     });
 
     const generationIds: string[] = [];
+    const envTags = [null, "development", "staging", "production"];
+    const colorTags = [null, "red", "blue", "yellow"];
 
     for (let i = 0; i < TRACE_VOLUME; i++) {
       // print progress to console with a progress bar that refreshes every 10 iterations
-      if (i % 10 === 0) {
+      if ((i + 1) % 10 === 0 || i === TRACE_VOLUME - 1) {
         process.stdout.clearLine(0);
         process.stdout.cursorTo(0);
-        process.stdout.write(`Seeding ${i} of ${TRACE_VOLUME}`);
+        process.stdout.write(`Seeding ${i + 1} of ${TRACE_VOLUME}`);
       }
       // random date within last 90 days, with a linear bias towards more recent dates
       const traceTs = new Date(
         Date.now() -
           Math.floor(Math.random() ** 1.5 * 90 * 24 * 60 * 60 * 1000),
       );
+
+      const envTag = envTags[Math.floor(Math.random() * envTags.length)];
+      const colorTag = colorTags[Math.floor(Math.random() * colorTags.length)];
+
+      const tags = [envTag, colorTag].filter((tag) => tag !== null);
+
+      const projectId = [project1.id, project2.id][i % 2] as string;
 
       const trace = await prisma.trace.create({
         data: {
@@ -127,25 +156,48 @@ async function main() {
           metadata: {
             user: `user-${i}@langfuse.com`,
           },
+          tags: tags as string[],
           project: {
-            connect: {
-              id: [project1.id, project2.id][i % 2],
-            },
+            connect: { id: projectId },
           },
           userId: `user-${i % 10}`,
+          session:
+            Math.random() > 0.3
+              ? {
+                  connectOrCreate: {
+                    where: {
+                      id_projectId: {
+                        id: `session-${i % 10}`,
+                        projectId: projectId,
+                      },
+                    },
+                    create: {
+                      id: `session-${i % 10}`,
+                      projectId: projectId,
+                    },
+                  },
+                }
+              : undefined,
+          input:
+            Math.random() > 0.3
+              ? "I'm looking for a React component"
+              : undefined,
+          output:
+            Math.random() > 0.3
+              ? "What kind of component are you looking for?"
+              : undefined,
           scores: {
             createMany: {
               data: [
-                {
-                  name: "latency",
-                  value: Math.floor(Math.random() * 20),
-                  timestamp: traceTs,
-                },
-                {
-                  name: "feedback",
-                  value: Math.floor(Math.random() * 3) - 1,
-                  timestamp: traceTs,
-                },
+                ...(Math.random() > 0.5
+                  ? [
+                      {
+                        name: "feedback",
+                        value: Math.floor(Math.random() * 3) - 1,
+                        timestamp: traceTs,
+                      },
+                    ]
+                  : []),
                 ...(Math.random() > 0.7
                   ? [
                       {
@@ -218,6 +270,19 @@ async function main() {
           const promptTokens = Math.floor(Math.random() * 1000) + 300;
           const completionTokens = Math.floor(Math.random() * 500) + 100;
 
+          const models = [
+            "gpt-3.5-turbo",
+            "gpt-4",
+            "gpt-4-32k-0613",
+            "gpt-3.5-turbo-16k-0613",
+            "claude-instant-1",
+            "claude-2.1",
+            "gpt-4-vision-preview",
+            "MIXTRAL-8X7B",
+          ];
+
+          const model = models[Math.floor(Math.random() * models.length)];
+
           const generation = await prisma.observation.create({
             data: {
               type: "GENERATION",
@@ -284,7 +349,8 @@ async function main() {
               
               Remember to import React at the top of your file whenever you're creating a component, because JSX transpiles to 'React.createElement' calls under the hood.`,
               },
-              model: Math.random() > 0.5 ? "gpt-3.5-turbo" : "gpt-4",
+              model: model,
+              internalModel: model,
               modelParameters: {
                 temperature:
                   Math.random() > 0.9 ? undefined : Math.random().toFixed(2),
@@ -303,25 +369,36 @@ async function main() {
               totalTokens: promptTokens + completionTokens,
               parentObservationId: span.id,
               traceId: trace.id,
+              ...{
+                ...(Math.random() > 0.5 && trace.projectId === prompt.projectId
+                  ? { prompt: { connect: { id: prompt.id } } }
+                  : {}),
+              },
+              unit: model
+                ? model.includes("claude")
+                  ? "CHARACTERS"
+                  : "TOKENS"
+                : undefined,
             },
           });
-
-          await prisma.score.create({
-            data: {
-              name: "quality",
-              value: Math.random() * 2 - 1,
-              observationId: generation.id,
-              traceId: trace.id,
-            },
-          });
-          await prisma.score.create({
-            data: {
-              name: "conciseness",
-              value: Math.random() * 2 - 1,
-              observationId: generation.id,
-              traceId: trace.id,
-            },
-          });
+          if (Math.random() > 0.6)
+            await prisma.score.create({
+              data: {
+                name: "quality",
+                value: Math.random() * 2 - 1,
+                observationId: generation.id,
+                traceId: trace.id,
+              },
+            });
+          if (Math.random() > 0.6)
+            await prisma.score.create({
+              data: {
+                name: "conciseness",
+                value: Math.random() * 2 - 1,
+                observationId: generation.id,
+                traceId: trace.id,
+              },
+            });
 
           generationIds.push(generation.id);
 
@@ -353,47 +430,54 @@ async function main() {
       }
     }
 
-    const dataset = await prisma.dataset.create({
-      data: {
-        name: "demo-dataset",
-        projectId: project2.id,
-      },
-    });
-
-    const datasetRun = await prisma.datasetRuns.create({
-      data: {
-        name: "demo-dataset-run",
-        datasetId: dataset.id,
-      },
-    });
-
-    for (let runNumber = 0; runNumber < 10; runNumber++) {
-      //pick randomly from existingSpanIds
-      const sourceObservationId =
-        generationIds[Math.floor(Math.random() * generationIds.length)];
-      const runObservationId =
-        generationIds[Math.floor(Math.random() * generationIds.length)];
-
-      const datasetItem = await prisma.datasetItem.create({
+    for (let datasetNumber = 0; datasetNumber < 2; datasetNumber++) {
+      const dataset = await prisma.dataset.create({
         data: {
-          datasetId: dataset.id,
-          sourceObservationId:
-            Math.random() > 0.5 ? sourceObservationId : undefined,
-          input: [
-            { role: "user", content: "How can i create a React component?" },
-          ],
-          expectedOutput:
-            "Creating a React component can be done in two ways: as a functional component or as a class component. Let's start with a basic example of both.",
+          name: `demo-dataset-${datasetNumber}`,
+          projectId: project2.id,
         },
       });
 
-      await prisma.datasetRunItems.create({
-        data: {
-          datasetItemId: datasetItem.id,
-          observationId: runObservationId!,
-          datasetRunId: datasetRun.id,
-        },
-      });
+      for (let datasetRunNumber = 0; datasetRunNumber < 2; datasetRunNumber++) {
+        const datasetRun = await prisma.datasetRuns.create({
+          data: {
+            name: `demo-dataset-run-${datasetRunNumber}`,
+            datasetId: dataset.id,
+          },
+        });
+
+        for (let runNumber = 0; runNumber < 10; runNumber++) {
+          //pick randomly from existingSpanIds
+          const sourceObservationId =
+            generationIds[Math.floor(Math.random() * generationIds.length)];
+          const runObservationId =
+            generationIds[Math.floor(Math.random() * generationIds.length)];
+
+          const datasetItem = await prisma.datasetItem.create({
+            data: {
+              datasetId: dataset.id,
+              sourceObservationId:
+                Math.random() > 0.5 ? sourceObservationId : undefined,
+              input: [
+                {
+                  role: "user",
+                  content: "How can i create a React component?",
+                },
+              ],
+              expectedOutput:
+                "Creating a React component can be done in two ways: as a functional component or as a class component. Let's start with a basic example of both.",
+            },
+          });
+
+          await prisma.datasetRunItems.create({
+            data: {
+              datasetItemId: datasetItem.id,
+              observationId: runObservationId!,
+              datasetRunId: datasetRun.id,
+            },
+          });
+        }
+      }
     }
   }
 }

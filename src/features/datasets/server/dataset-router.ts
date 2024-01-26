@@ -20,7 +20,7 @@ export const datasetRouter = createTRPCRouter({
           Dataset & {
             countDatasetItems: number;
             countDatasetRuns: number;
-            lastRunAt: Date;
+            lastRunAt: Date | null;
           }
         >
       >(Prisma.sql`
@@ -29,7 +29,6 @@ export const datasetRouter = createTRPCRouter({
           d.name,
           d.created_at "createdAt",
           d.updated_at "updatedAt",
-          d.status,
           count(distinct di.id)::int "countDatasetItems",
           count(distinct dr.id)::int "countDatasetRuns",
           max(dr.created_at) "lastRunAt"
@@ -37,8 +36,8 @@ export const datasetRouter = createTRPCRouter({
         LEFT JOIN dataset_items di ON di.dataset_id = d.id
         LEFT JOIN dataset_runs dr ON dr.dataset_id = d.id
         WHERE d.project_id = ${input.projectId}
-        GROUP BY 1,2,3,4,5
-        ORDER BY d.status ASC, d.created_at DESC
+        GROUP BY 1,2,3,4
+        ORDER BY d.created_at DESC
       `);
     }),
   byId: protectedProjectProcedure
@@ -221,8 +220,8 @@ export const datasetRouter = createTRPCRouter({
             input.expectedOutput === ""
               ? Prisma.DbNull
               : input.expectedOutput !== undefined
-              ? (JSON.parse(input.expectedOutput) as Prisma.InputJsonObject)
-              : undefined,
+                ? (JSON.parse(input.expectedOutput) as Prisma.InputJsonObject)
+                : undefined,
           sourceObservationId: input.sourceObservationId,
           status: input.status,
         },
@@ -243,29 +242,18 @@ export const datasetRouter = createTRPCRouter({
         },
       });
     }),
-  updateDataset: protectedProjectProcedure
-    .input(
-      z.object({
-        projectId: z.string(),
-        datasetId: z.string(),
-        status: z.enum(["ACTIVE", "ARCHIVED"]).optional(),
-        name: z.string().optional(),
-      }),
-    )
+  deleteDataset: protectedProjectProcedure
+    .input(z.object({ projectId: z.string(), datasetId: z.string() }))
     .mutation(async ({ input, ctx }) => {
       throwIfNoAccess({
         session: ctx.session,
         projectId: input.projectId,
         scope: "datasets:CUD",
       });
-      return ctx.prisma.dataset.update({
+      return ctx.prisma.dataset.delete({
         where: {
           id: input.datasetId,
           projectId: input.projectId,
-        },
-        data: {
-          status: input.status,
-          name: input.name,
         },
       });
     }),
@@ -275,7 +263,7 @@ export const datasetRouter = createTRPCRouter({
         projectId: z.string(),
         datasetId: z.string(),
         input: z.string(),
-        expectedOutput: z.string(),
+        expectedOutput: z.string().nullish(),
         sourceObservationId: z.string().optional(),
       }),
     )
@@ -301,9 +289,9 @@ export const datasetRouter = createTRPCRouter({
           expectedOutput:
             input.expectedOutput === ""
               ? Prisma.DbNull
-              : input.expectedOutput !== undefined
-              ? (JSON.parse(input.expectedOutput) as Prisma.InputJsonObject)
-              : undefined,
+              : !!input.expectedOutput
+                ? (JSON.parse(input.expectedOutput) as Prisma.InputJsonObject)
+                : undefined,
           datasetId: input.datasetId,
           sourceObservationId: input.sourceObservationId,
         },

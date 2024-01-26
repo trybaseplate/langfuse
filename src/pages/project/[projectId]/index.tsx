@@ -67,8 +67,8 @@ export default function Start() {
     posthog.capture("dashboard:date_range_changed");
     setUrlParams({
       select: option ? option.toString() : urlParams.select,
-      from: dateRange ? dateRange.from?.getTime() : urlParams.from,
-      to: dateRange ? dateRange.to?.getTime() : urlParams.to,
+      from: dateRange ? dateRange.from.getTime() : urlParams.from,
+      to: dateRange ? dateRange.to.getTime() : urlParams.to,
     });
   };
 
@@ -105,6 +105,7 @@ export default function Start() {
           projectId={projectId}
           globalFilterState={globalFilterState}
         />
+
         <MetricTable
           className="col-span-1 xl:col-span-2"
           projectId={projectId}
@@ -122,7 +123,7 @@ export default function Start() {
           agg={agg}
         />
         <ModelUsageChart
-          className="min-h-24  col-span-1 xl:col-span-3"
+          className="col-span-1  min-h-24 xl:col-span-3"
           projectId={projectId}
           globalFilterState={globalFilterState}
           agg={agg}

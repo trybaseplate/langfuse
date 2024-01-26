@@ -1,17 +1,496 @@
 /** @jest-environment node */
 
 import { makeAPICall, pruneDatabase } from "@/src/__tests__/test-utils";
+import { cleanEvent } from "@/src/pages/api/public/ingestion";
 import { prisma } from "@/src/server/db";
 import { v4 } from "uuid";
 
 describe("/api/public/ingestion API Endpoint", () => {
   beforeEach(async () => await pruneDatabase());
 
-  it("should create trace and generation", async () => {
+  [
+    {
+      usage: {
+        input: 100,
+        output: 200,
+        total: 100,
+        unit: "CHARACTERS",
+        inputCost: 123,
+        outputCost: 456,
+        totalCost: 789,
+      },
+      expectedUnit: "CHARACTERS",
+      expectedPromptTokens: 100,
+      expectedCompletionTokens: 200,
+      expectedTotalTokens: 100,
+    },
+    {
+      usage: {
+        total: 100,
+        unit: "CHARACTERS",
+      },
+      expectedUnit: "CHARACTERS",
+      expectedPromptTokens: 0,
+      expectedCompletionTokens: 0,
+      expectedTotalTokens: 100,
+    },
+    {
+      usage: {
+        total: 100,
+      },
+      expectedUnit: "TOKENS",
+      expectedPromptTokens: 0,
+      expectedCompletionTokens: 0,
+      expectedTotalTokens: 100,
+    },
+    {
+      usage: {
+        promptTokens: 100,
+        completionTokens: 200,
+        totalTokens: 100,
+      },
+      expectedPromptTokens: 100,
+      expectedCompletionTokens: 200,
+      expectedTotalTokens: 100,
+      expectedUnit: "TOKENS",
+    },
+    {
+      usage: {
+        totalTokens: 100,
+      },
+      expectedPromptTokens: 0,
+      expectedCompletionTokens: 0,
+      expectedTotalTokens: 100,
+      expectedUnit: "TOKENS",
+    },
+    {
+      usage: undefined,
+      expectedPromptTokens: 0,
+      expectedCompletionTokens: 0,
+      expectedTotalTokens: 0,
+      expectedUnit: "TOKENS",
+    },
+    {
+      usage: null,
+      expectedPromptTokens: 0,
+      expectedCompletionTokens: 0,
+      expectedTotalTokens: 0,
+      expectedUnit: "TOKENS",
+    },
+    {
+      usage: {},
+      expectedPromptTokens: 0,
+      expectedCompletionTokens: 0,
+      expectedTotalTokens: 0,
+      expectedUnit: "TOKENS",
+    },
+  ].forEach((testConfig) => {
+    it(`should create trace, generation and score without matching models ${JSON.stringify(
+      testConfig,
+    )}`, async () => {
+      const traceId = v4();
+      const generationId = v4();
+      const spanId = v4();
+      const scoreId = v4();
+
+      const response = await makeAPICall("POST", "/api/public/ingestion", {
+        metadata: {
+          sdk_verion: "1.0.0",
+          sdk_name: "python",
+        },
+        batch: [
+          {
+            id: v4(),
+            type: "trace-create",
+            timestamp: new Date().toISOString(),
+            body: {
+              id: traceId,
+              name: "trace-name",
+              userId: "user-1",
+              metadata: { key: "value" },
+              release: "1.0.0",
+              version: "2.0.0",
+              tags: ["tag-1", "tag-2"],
+            },
+          },
+          {
+            id: v4(),
+            type: "observation-create",
+            timestamp: new Date().toISOString(),
+            body: {
+              id: generationId,
+              traceId: traceId,
+              type: "GENERATION",
+              name: "generation-name",
+              startTime: "2021-01-01T00:00:00.000Z",
+              endTime: "2021-01-01T00:00:00.000Z",
+              modelParameters: { key: "value" },
+              input: { key: "value" },
+              metadata: { key: "value" },
+              version: "2.0.0",
+            },
+          },
+          {
+            id: v4(),
+            type: "observation-update",
+            timestamp: new Date().toISOString(),
+            body: {
+              id: generationId,
+              type: "GENERATION",
+              output: { key: "this is a great gpt output" },
+              usage: testConfig.usage,
+            },
+          },
+          {
+            id: v4(),
+            type: "observation-create",
+            timestamp: new Date().toISOString(),
+            body: {
+              id: spanId,
+              traceId: traceId,
+              type: "SPAN",
+              name: "span-name",
+              startTime: "2021-01-01T00:00:00.000Z",
+              endTime: "2021-01-01T00:00:00.000Z",
+              input: { input: "value" },
+              metadata: { meta: "value" },
+              version: "2.0.0",
+            },
+          },
+          {
+            id: v4(),
+            type: "score-create",
+            timestamp: new Date().toISOString(),
+            body: {
+              id: scoreId,
+              name: "score-name",
+              value: 100.5,
+              traceId: traceId,
+            },
+          },
+        ],
+      });
+
+      expect(response.status).toBe(207);
+
+      console.log("response body", response.body);
+
+      const dbTrace = await prisma.trace.findMany({
+        where: {
+          name: "trace-name",
+        },
+      });
+
+      expect(dbTrace.length).toBeGreaterThan(0);
+      expect(dbTrace[0]?.name).toBe("trace-name");
+      expect(dbTrace[0]?.release).toBe("1.0.0");
+      expect(dbTrace[0]?.externalId).toBeNull();
+      expect(dbTrace[0]?.version).toBe("2.0.0");
+      expect(dbTrace[0]?.projectId).toBe(
+        "7a88fb47-b4e2-43b8-a06c-a5ce950dc53a",
+      );
+      expect(dbTrace[0]?.tags).toEqual(["tag-1", "tag-2"]);
+
+      const dbGeneration = await prisma.observation.findUnique({
+        where: {
+          id: generationId,
+        },
+      });
+
+      expect(dbGeneration?.id).toBe(generationId);
+      expect(dbGeneration?.traceId).toBe(traceId);
+      expect(dbGeneration?.name).toBe("generation-name");
+      expect(dbGeneration?.startTime).toEqual(
+        new Date("2021-01-01T00:00:00.000Z"),
+      );
+      expect(dbGeneration?.endTime).toEqual(
+        new Date("2021-01-01T00:00:00.000Z"),
+      );
+      expect(dbGeneration?.model).toBeNull();
+      expect(dbGeneration?.modelParameters).toEqual({ key: "value" });
+      expect(dbGeneration?.input).toEqual({ key: "value" });
+      expect(dbGeneration?.metadata).toEqual({ key: "value" });
+      expect(dbGeneration?.version).toBe("2.0.0");
+      expect(dbGeneration?.internalModel).toBeNull();
+      expect(dbGeneration?.promptTokens).toEqual(
+        testConfig.expectedPromptTokens,
+      );
+      expect(dbGeneration?.completionTokens).toEqual(
+        testConfig.expectedCompletionTokens,
+      );
+      expect(dbGeneration?.totalTokens).toEqual(testConfig.expectedTotalTokens);
+      expect(dbGeneration?.unit).toEqual(testConfig.expectedUnit);
+      expect(dbGeneration?.output).toEqual({
+        key: "this is a great gpt output",
+      });
+
+      const dbSpan = await prisma.observation.findUnique({
+        where: {
+          id: spanId,
+        },
+      });
+
+      expect(dbSpan?.id).toBe(spanId);
+      expect(dbSpan?.name).toBe("span-name");
+      expect(dbSpan?.startTime).toEqual(new Date("2021-01-01T00:00:00.000Z"));
+      expect(dbSpan?.endTime).toEqual(new Date("2021-01-:00:00.000Z"));
+      expect(dbSpan?.input).toEqual({ input: "value" });
+      expect(dbSpan?.metadata).toEqual({ meta: "value" });
+      expect(dbSpan?.version).toBe("2.0.0");
+
+      const dbScore = await prisma.score.findUnique({
+        where: {
+          id: scoreId,
+        },
+      });
+
+      expect(dbScore?.id).toBe(scoreId);
+      expect(dbScore?.traceId).toBe(traceId);
+      expect(dbScore?.name).toBe("score-name");
+      expect(dbScore?.value).toBe(100.5);
+      expect(dbScore?.observationId).toBeNull();
+    });
+  });
+
+  [
+    {
+      observationExternalModel: "gpt-3.5",
+      observationStartTime: new Date("2021-01-01T00:00:00.000Z"),
+      modelUnit: "TOKENS",
+      expectedInternalModel: "gpt-3.5-turbo",
+      expectedPromptTokens: 5,
+      expectedCompletionTokens: 7,
+      models: [
+        {
+          modelName: "gpt-3.5-turbo",
+          matchPattern: "(?i)^(gpt-)(35|3.5)(-turbo)?$",
+          startDate: new Date("2021-01-01T00:00:00.000Z"),
+          unit: "TOKENS",
+          tokenizerId: "openai",
+        },
+      ],
+    },
+    {
+      observationExternalModel: "gpt-3.5",
+      observationStartTime: new Date("2021-01-01T00:00:00.000Z"),
+      modelUnit: "TOKENS",
+      expectedInternalModel: "gpt-3.5-turbo",
+      expectedPromptTokens: 5,
+      expectedCompletionTokens: 7,
+      models: [
+        {
+          modelName: "gpt-3.5-turbo",
+          matchPattern: "(?i)^(gpt-)(35|3.5)(-turbo)?$",
+          startDate: null,
+          unit: "TOKENS",
+          tokenizerId: "openai",
+        },
+      ],
+    },
+    {
+      observationExternalModel: "GPT-3.5",
+      observationStartTime: new Date("2021-01-01T00:00:00.000Z"),
+      modelUnit: "TOKENS",
+      expectedInternalModel: "gpt-3.5-turbo",
+      expectedPromptTokens: 5,
+      expectedCompletionTokens: 7,
+      models: [
+        {
+          modelName: "gpt-3.5-turbo",
+          matchPattern: "(?i)^(gpt-)(35|3.5)(-turbo)?$",
+          startDate: new Date("2021-01-01T00:00:00.000Z"),
+          unit: "TOKENS",
+          tokenizerId: "openai",
+        },
+      ],
+    },
+    {
+      observationExternalModel: "GPT-3.5",
+      observationStartTime: new Date("2021-01-01T00:00:00.000Z"),
+      modelUnit: "TOKENS",
+      expectedInternalModel: "gpt-3.5-turbo",
+      expectedPromptTokens: 5,
+      expectedCompletionTokens: 7,
+      models: [
+        {
+          modelName: "gpt-3.5-turbo",
+          matchPattern: "(?i)^(gpt-)(35|3.5)(-turbo)?$",
+          startDate: new Date("2021-01-01T00:00:00.000Z"),
+          unit: "TOKENS",
+          tokenizerId: "openai",
+        },
+        {
+          modelName: "gpt-3.5-turbo-new",
+          matchPattern: "(?i)^(gpt-)(35|3.5)(-turbo)?$",
+          startDate: new Date("2021-01-01T10:00:00.000Z"),
+          unit: "TOKENS",
+          tokenizerId: "openai",
+        },
+      ],
+    },
+    {
+      observationExternalModel: "GPT-3.5",
+      observationStartTime: new Date("2021-01-02T00:00:00.000Z"),
+      modelUnit: "TOKENS",
+      expectedInternalModel: "gpt-3.5-turbo",
+      expectedPromptTokens: 5,
+      expectedCompletionTokens: 7,
+      models: [
+        {
+          modelName: "gpt-3.5-turbo-new",
+          matchPattern: "(?i)^(gpt-)(35|3.5)(-turbo)?$",
+          startDate: new Date("2021-01-01T00:00:00.000Z"),
+          unit: "TOKENS",
+          tokenizerId: "openai",
+        },
+        {
+          modelName: "gpt-3.5-turbo",
+          matchPattern: "(?i)^(gpt-)(35|3.5)(-turbo)?$",
+          startDate: new Date("2021-01-01T10:00:00.000Z"),
+          unit: "TOKENS",
+          tokenizerId: "openai",
+          tokenizerModel: "gpt-3.5-turbo",
+        },
+      ],
+    },
+    {
+      observationExternalModel: "GPT-4",
+      observationStartTime: new Date("2021-01-01T00:00:00.000Z"),
+      modelUnit: "TOKENS",
+      expectedInternalModel: null,
+      expectedPromptTokens: 0,
+      expectedCompletionTokens: 0,
+      models: [
+        {
+          modelName: "gpt-3.5-turbo",
+          matchPattern: "(?i)^(gpt-)(35|3.5)(-turbo)?$",
+          startDate: new Date("2021-01-01T00:00:00.000Z"),
+          unit: "TOKENS",
+          tokenizerId: "openai",
+        },
+      ],
+    },
+    {
+      observationExternalModel: "GPT-3",
+      observationStartTime: new Date("2021-01-01T00:00:00.000Z"),
+      modelUnit: "CHARACTERS",
+      expectedInternalModel: null,
+      expectedPromptTokens: 0,
+      expectedCompletionTokens: 0,
+      models: [
+        {
+          modelName: "gpt-3.5-turbo",
+          matchPattern: "(?i)^(gpt-)(35|3.5)(-turbo)?$",
+          startDate: new Date("2021-01-01T00:00:00.000Z"),
+          unit: "TOKENS",
+          tokenizerId: "openai",
+        },
+      ],
+    },
+  ].forEach((testConfig) => {
+    it(`should match observations to internal models ${JSON.stringify(
+      testConfig,
+    )}`, async () => {
+      const traceId = v4();
+      const generationId = v4();
+
+      await Promise.all(
+        testConfig.models.map(async (model) =>
+          prisma.model.create({
+            data: {
+              modelName: model.modelName,
+              matchPattern: model.matchPattern,
+              startDate: model.startDate,
+              unit: model.unit,
+              tokenizerId: model.tokenizerId,
+              tokenizerConfig: {
+                tokensPerMessage: 3,
+                tokensPerName: 1,
+                tokenizerModel:
+                  "tokenizerModel" in model
+                    ? model.tokenizerModel
+                    : model.modelName,
+              },
+            },
+          }),
+        ),
+      );
+
+      const response = await makeAPICall("POST", "/api/public/ingestion", {
+        metadata: {
+          sdk_verion: "1.0.0",
+          sdk_name: "python",
+        },
+        batch: [
+          {
+            id: v4(),
+            type: "trace-create",
+            timestamp: new Date().toISOString(),
+            body: {
+              id: traceId,
+              name: "trace-name",
+            },
+          },
+          {
+            id: v4(),
+            type: "observation-create",
+            timestamp: new Date().toISOString(),
+            body: {
+              id: generationId,
+              traceId: traceId,
+              type: "GENERATION",
+              name: "generation-name",
+              startTime: testConfig.observationStartTime.toISOString(),
+              model: testConfig.observationExternalModel,
+              usage: {
+                unit: testConfig.modelUnit,
+              },
+              input: "This is a great prompt",
+              output: "This is a great gpt output",
+            },
+          },
+        ],
+      });
+
+      expect(response.status).toBe(207);
+
+      console.log("response body", response.body);
+
+      const dbGeneration = await prisma.observation.findUnique({
+        where: {
+          id: generationId,
+        },
+      });
+
+      expect(dbGeneration?.id).toBe(generationId);
+      expect(dbGeneration?.traceId).toBe(traceId);
+      expect(dbGeneration?.name).toBe("generation-name");
+      expect(dbGeneration?.startTime).toEqual(testConfig.observationStartTime);
+      expect(dbGeneration?.model).toBe(testConfig.observationExternalModel);
+      expect(dbGeneration?.promptTokens).toBe(testConfig.expectedPromptTokens);
+      expect(dbGeneration?.completionTokens).toBe(
+        testConfig.expectedCompletionTokens,
+      );
+      expect(dbGeneration?.internalModel).toBe(
+        testConfig.expectedInternalModel,
+      );
+    });
+  });
+
+  it("should create and update all events", async () => {
     const traceId = v4();
     const generationId = v4();
     const spanId = v4();
+    const eventId = v4();
     const scoreId = v4();
+
+    const exception = `
+    ERROR    langfuse:callback.py:677 'model_name'
+    Traceback (most recent call last):
+      File "/Users/maximiliandeichmann/development/github.com/langfuse/langfuse-python/langfuse/callback.py", line 674, in __on_llm_action
+        model_name = kwargs["invocation_params"]["model_name"]
+    KeyError: 'model_name'
+    `;
 
     const response = await makeAPICall("POST", "/api/public/ingestion", {
       batch: [
@@ -21,55 +500,56 @@ describe("/api/public/ingestion API Endpoint", () => {
           timestamp: new Date().toISOString(),
           body: {
             id: traceId,
-            name: "trace-name",
-            userId: "user-1",
-            metadata: { key: "value" },
-            release: "1.0.0",
-            version: "2.0.0",
           },
         },
         {
           id: v4(),
-          type: "observation-create",
-          timestamp: new Date().toISOString(),
-          body: {
-            id: generationId,
-            traceId: traceId,
-            type: "GENERATION",
-            name: "generation-name",
-            startTime: "2021-01-01T00:00:00.000Z",
-            endTime: "2021-01-01T00:00:00.000Z",
-            modelParameters: { key: "value" },
-            input: { key: "value" },
-            metadata: { key: "value" },
-            version: "2.0.0",
-          },
-        },
-        {
-          id: v4(),
-          type: "observation-update",
-          timestamp: new Date().toISOString(),
-          body: {
-            id: generationId,
-            type: "GENERATION",
-            output: { key: "this is a great gpt output" },
-            usage: { promptTokens: 400, completionTokens: 1000 },
-          },
-        },
-        {
-          id: v4(),
-          type: "observation-create",
+          type: "span-create",
           timestamp: new Date().toISOString(),
           body: {
             id: spanId,
             traceId: traceId,
-            type: "SPAN",
+          },
+        },
+        {
+          id: v4(),
+          type: "span-update",
+          timestamp: new Date().toISOString(),
+          body: {
+            id: spanId,
+            traceId: traceId,
             name: "span-name",
-            startTime: "2021-01-01T00:00:00.000Z",
-            endTime: "2021-01-01T00:00:00.000Z",
-            input: { input: "value" },
-            metadata: { meta: "value" },
-            version: "2.0.0",
+          },
+        },
+        {
+          id: v4(),
+          type: "generation-create",
+          timestamp: new Date().toISOString(),
+          body: {
+            id: generationId,
+            traceId: traceId,
+            parentObservationId: spanId,
+            modelParameters: { someKey: ["user-1", "user-2"] },
+          },
+        },
+        {
+          id: v4(),
+          type: "generation-update",
+          timestamp: new Date().toISOString(),
+          body: {
+            id: generationId,
+            name: "generation-name",
+          },
+        },
+        {
+          id: v4(),
+          type: "event-create",
+          timestamp: new Date().toISOString(),
+          body: {
+            id: eventId,
+            traceId: traceId,
+            name: "event-name",
+            parentObservationId: generationId,
           },
         },
         {
@@ -79,8 +559,17 @@ describe("/api/public/ingestion API Endpoint", () => {
           body: {
             id: scoreId,
             name: "score-name",
-            value: 100.5,
             traceId: traceId,
+            value: 100.5,
+            observationId: generationId,
+          },
+        },
+        {
+          id: v4(),
+          type: "sdk-log",
+          timestamp: new Date().toISOString(),
+          body: {
+            log: exception,
           },
         },
       ],
@@ -90,16 +579,22 @@ describe("/api/public/ingestion API Endpoint", () => {
 
     const dbTrace = await prisma.trace.findMany({
       where: {
-        name: "trace-name",
+        id: traceId,
       },
     });
 
     expect(dbTrace.length).toBeGreaterThan(0);
-    expect(dbTrace[0]?.name).toBe("trace-name");
-    expect(dbTrace[0]?.release).toBe("1.0.0");
-    expect(dbTrace[0]?.externalId).toBeNull();
-    expect(dbTrace[0]?.version).toBe("2.0.0");
     expect(dbTrace[0]?.projectId).toBe("7a88fb47-b4e2-43b8-a06c-a5ce950dc53a");
+
+    const dbSpan = await prisma.observation.findUnique({
+      where: {
+        id: spanId,
+      },
+    });
+
+    expect(dbSpan?.id).toBe(spanId);
+    expect(dbSpan?.name).toBe("span-name");
+    expect(dbSpan?.traceId).toBe(traceId);
 
     const dbGeneration = await prisma.observation.findUnique({
       where: {
@@ -110,34 +605,21 @@ describe("/api/public/ingestion API Endpoint", () => {
     expect(dbGeneration?.id).toBe(generationId);
     expect(dbGeneration?.traceId).toBe(traceId);
     expect(dbGeneration?.name).toBe("generation-name");
-    expect(dbGeneration?.startTime).toEqual(
-      new Date("2021-01-01T00:00:00.000Z"),
-    );
-    expect(dbGeneration?.endTime).toEqual(new Date("2021-01-01T00:00:00.000Z"));
-    expect(dbGeneration?.model).toBeNull();
-    expect(dbGeneration?.modelParameters).toEqual({ key: "value" });
-    expect(dbGeneration?.input).toEqual({ key: "value" });
-    expect(dbGeneration?.metadata).toEqual({ key: "value" });
-    expect(dbGeneration?.version).toBe("2.0.0");
-    expect(dbGeneration?.promptTokens).toEqual(400);
-    expect(dbGeneration?.completionTokens).toEqual(1000);
-    expect(dbGeneration?.output).toEqual({
-      key: "this is a great gpt output",
+    expect(dbGeneration?.parentObservationId).toBe(spanId);
+    expect(dbGeneration?.modelParameters).toEqual({
+      someKey: ["user-1", "user-2"],
     });
 
-    const dbSpan = await prisma.observation.findUnique({
+    const dbEvent = await prisma.observation.findUnique({
       where: {
-        id: spanId,
+        id: eventId,
       },
     });
 
-    expect(dbSpan?.id).toBe(spanId);
-    expect(dbSpan?.name).toBe("span-name");
-    expect(dbSpan?.startTime).toEqual(new Date("2021-01-01T00:00:00.000Z"));
-    expect(dbSpan?.endTime).toEqual(new Date("2021-01-:00:00.000Z"));
-    expect(dbSpan?.input).toEqual({ input: "value" });
-    expect(dbSpan?.metadata).toEqual({ meta: "value" });
-    expect(dbSpan?.version).toBe("2.0.0");
+    expect(dbEvent?.id).toBe(eventId);
+    expect(dbEvent?.traceId).toBe(traceId);
+    expect(dbEvent?.name).toBe("event-name");
+    expect(dbEvent?.parentObservationId).toBe(generationId);
 
     const dbScore = await prisma.score.findUnique({
       where: {
@@ -147,9 +629,21 @@ describe("/api/public/ingestion API Endpoint", () => {
 
     expect(dbScore?.id).toBe(scoreId);
     expect(dbScore?.traceId).toBe(traceId);
-    expect(dbScore?.name).toBe("score-name");
+    expect(dbScore?.observationId).toBe(generationId);
     expect(dbScore?.value).toBe(100.5);
-    expect(dbScore?.observationId).toBeNull();
+
+    const logEvent = await prisma.events.findFirst({
+      where: {
+        data: {
+          path: ["body", "log"],
+          string_contains: "ERROR",
+        },
+      },
+    });
+
+    expect(logEvent).toBeDefined();
+    expect(logEvent).not.toBeFalsy();
+    expect(JSON.stringify(logEvent?.data)).toContain("KeyError: 'model_name'");
   });
 
   it("should upsert threats", async () => {
@@ -247,9 +741,126 @@ describe("/api/public/ingestion API Endpoint", () => {
     expect(dbTrace.length).toBe(1);
   });
 
+  it("should fail for auth errors", async () => {
+    const traceId = v4();
+    const scoreId = v4();
+
+    const responseOne = await makeAPICall("POST", "/api/public/ingestion", {
+      batch: [
+        {
+          id: v4(),
+          type: "trace-create",
+          timestamp: new Date().toISOString(),
+          body: {
+            id: traceId,
+            name: "trace-name",
+            userId: "user-1",
+            metadata: { key: "value" },
+            release: "1.0.0",
+            version: "2.0.0",
+          },
+        },
+        {
+          id: v4(),
+          type: "score-create",
+          timestamp: new Date().toISOString(),
+          body: {
+            id: scoreId,
+            name: "score-name",
+            value: 100.5,
+            traceId: "some-random-id",
+          },
+        },
+      ],
+    });
+
+    console.log(responseOne.body);
+    expect(responseOne.status).toBe(207);
+
+    expect("errors" in responseOne.body).toBe(true);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    expect(responseOne.body?.errors.length).toBe(1);
+    expect("successes" in responseOne.body).toBe(true);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    expect(responseOne.body?.successes.length).toBe(1);
+
+    const dbTrace = await prisma.trace.findMany({
+      where: {
+        name: "trace-name",
+      },
+    });
+
+    expect(dbTrace.length).toBe(1);
+  });
+
+  it("should fail for resource not found", async () => {
+    const traceId = v4();
+
+    const responseOne = await makeAPICall("POST", "/api/public/ingestion", {
+      batch: [
+        {
+          id: v4(),
+          type: "trace-create",
+          timestamp: new Date().toISOString(),
+          body: {
+            id: traceId,
+            name: "trace-name",
+            userId: "user-1",
+            metadata: { key: "value" },
+            release: "1.0.0",
+            version: "2.0.0",
+          },
+        },
+        {
+          id: v4(),
+          type: "observation-update",
+          timestamp: new Date().toISOString(),
+          body: {
+            id: "some-random-id",
+            type: "GENERATION",
+            output: { key: "this is a great gpt output" },
+          },
+        },
+      ],
+    });
+
+    console.log(responseOne.body);
+    expect(responseOne.status).toBe(207);
+
+    expect("errors" in responseOne.body).toBe(true);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    expect(responseOne.body?.errors.length).toBe(1);
+    expect("successes" in responseOne.body).toBe(true);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    expect(responseOne.body?.successes.length).toBe(1);
+
+    const dbTrace = await prisma.trace.findMany({
+      where: {
+        name: "trace-name",
+      },
+    });
+
+    expect(dbTrace.length).toBe(1);
+  });
+
   it("should update all token counts if update does not contain model name", async () => {
     const traceId = v4();
     const generationId = v4();
+
+    await prisma.model.create({
+      data: {
+        modelName: "gpt-3.5",
+        matchPattern: "(?i)^(gpt-)(35|3.5)(-turbo)?$",
+        startDate: new Date("2021-01-01T00:00:00.000Z"),
+        unit: "TOKENS",
+        tokenizerId: "openai",
+        tokenizerConfig: {
+          tokensPerMessage: 3,
+          tokensPerName: 1,
+          tokenizerModel: "gpt-3.5-turbo",
+        },
+      },
+    });
 
     const responseOne = await makeAPICall("POST", "/api/public/ingestion", {
       batch: [
@@ -317,6 +928,21 @@ describe("/api/public/ingestion API Endpoint", () => {
   it("should update all token counts if update does not contain model name and events come in wrong order", async () => {
     const traceId = v4();
     const generationId = v4();
+
+    await prisma.model.create({
+      data: {
+        modelName: "gpt-3.5",
+        matchPattern: "(?i)^(gpt-)(35|3.5)(-turbo)?$",
+        startDate: new Date("2021-01-01T00:00:00.000Z"),
+        unit: "TOKENS",
+        tokenizerId: "openai",
+        tokenizerConfig: {
+          tokensPerMessage: 3,
+          tokensPerName: 1,
+          tokenizerModel: "gpt-3.5-turbo",
+        },
+      },
+    });
 
     const responseOne = await makeAPICall("POST", "/api/public/ingestion", {
       batch: [
@@ -425,6 +1051,66 @@ describe("/api/public/ingestion API Endpoint", () => {
     expect(dbTrace.length).toEqual(1);
     expect(dbTrace[0]?.release).toBe("1.0.0");
     expect(dbTrace[0]?.version).toBe("2.0.0");
+  });
+
+  it("should not override a trace from a different project", async () => {
+    const traceId = v4();
+    const newProjectId = v4();
+
+    await prisma.project.create({
+      data: {
+        id: newProjectId,
+        name: "another-project",
+      },
+    });
+
+    await prisma.trace.create({
+      data: {
+        id: traceId,
+        project: { connect: { id: newProjectId } },
+      },
+    });
+
+    const responseOne = await makeAPICall("POST", "/api/public/ingestion", {
+      batch: [
+        {
+          id: v4(),
+          type: "trace-create",
+          timestamp: new Date().toISOString(),
+          body: {
+            id: traceId,
+            name: "trace-name",
+            userId: "user-1",
+            metadata: { key: "value" },
+            release: "1.0.0",
+            version: "2.0.0",
+          },
+        },
+      ],
+    });
+    expect(responseOne.status).toBe(207);
+
+    console.log(responseOne.body);
+
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+    const errors = responseOne.body.errors;
+
+    expect(errors).toBeDefined();
+    console.log(errors);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    expect(errors.length).toBe(1);
+
+    const dbTrace = await prisma.trace.findMany({
+      where: {
+        id: traceId,
+      },
+    });
+
+    expect(dbTrace.length).toEqual(1);
+    expect(dbTrace[0]?.name).toBeNull();
+    expect(dbTrace[0]?.release).toBeNull();
+    expect(dbTrace[0]?.metadata).toBeNull();
+    expect(dbTrace[0]?.version).toBeNull();
   });
 
   [
@@ -583,5 +1269,81 @@ describe("/api/public/ingestion API Endpoint", () => {
     });
 
     expect(dbGeneration).toBeTruthy();
+  });
+
+  it("filters out NULL characters", async () => {
+    const traceId = v4();
+    const generationId = v4();
+
+    const responseOne = await makeAPICall("POST", "/api/public/ingestion", {
+      batch: [
+        {
+          id: v4(),
+          type: "trace-create",
+          timestamp: new Date().toISOString(),
+          body: {
+            id: traceId,
+            name: "trace-name",
+          },
+        },
+        {
+          id: v4(),
+          type: "observation-create",
+          timestamp: new Date().toISOString(),
+          body: {
+            id: generationId,
+            traceId: traceId,
+            type: "GENERATION",
+            name: "generation-name",
+            traceIdType: "LANGFUSE",
+            input: {
+              key: "IB\nibo.org Change site\nIB Home   /   . . .   /   News   /   News about the IB   /   Why ChatGPT is an opportunity for schools  IB Home   /   News   /   News about the IB   /   Why ChatGPT is an opportunity for schools  Why ChatGPT is an opportunity for  schools  Published:   06 March 2023   Last updated:   06 June 2023  Date published:   28 February 2023  Dr Matthew Glanville, Head of Assessment Principles and Practice  Source:   Why ChatGPT is an opportunity for schools | The Times  Those of us who work in the schools or exam sector should not be terri \u0000 ed by ChatGPT and  the rise of AI software – we should be excited. We should embrace it as an extraordinary  opportunity.  Contrary to some stark warnings, it is not the end of exams, nor even a huge threat to  coursework, but it does bring into very sharp focus the impact that arti \u0000 ",
+            },
+            output: {
+              key: "제점이 있었죠. 그중 하나는 일제가 한국의 신용체계를 망가뜨린 채 한국을 떠났다는 겁니다. 해방전 일제는 조선의 신용체계를 거의 독점적으로 소유한 상황이었습니다. 1945년 6월 기준 일제는 조선의 본점을 둔 전체은행 5개의 불입자본 총액의 89.7%를",
+            },
+          },
+        },
+      ],
+    });
+    expect(responseOne.status).toBe(207);
+
+    const dbTrace = await prisma.trace.findMany({
+      where: {
+        id: traceId,
+      },
+    });
+
+    expect(dbTrace.length).toEqual(1);
+
+    const dbGeneration = await prisma.observation.findUnique({
+      where: {
+        id: generationId,
+      },
+    });
+    expect(dbGeneration?.input).toStrictEqual({
+      key: `IB
+ibo.org Change site
+IB Home   /   . . .   /   News   /   News about the IB   /   Why ChatGPT is an opportunity for schools  IB Home   /   News   /   News about the IB   /   Why ChatGPT is an opportunity for schools  Why ChatGPT is an opportunity for  schools  Published:   06 March 2023   Last updated:   06 June 2023  Date published:   28 February 2023  Dr Matthew Glanville, Head of Assessment Principles and Practice  Source:   Why ChatGPT is an opportunity for schools | The Times  Those of us who work in the schools or exam sector should not be terri  ed by ChatGPT and  the rise of AI software – we should be excited. We should embrace it as an extraordinary  opportunity.  Contrary to some stark warnings, it is not the end of exams, nor even a huge threat to  coursework, but it does bring into very sharp focus the impact that arti  `,
+    });
+    expect(dbGeneration?.output).toStrictEqual({
+      key: "제점이 있었죠. 그중 하나는 일제가 한국의 신용체계를 망가뜨린 채 한국을 떠났다는 겁니다. 해방전 일제는 조선의 신용체계를 거의 독점적으로 소유한 상황이었습니다. 1945년 6월 기준 일제는 조선의 본점을 둔 전체은행 5개의 불입자본 총액의 89.7%를",
+    });
+
+    expect(dbGeneration).toBeTruthy();
+  });
+
+  [
+    { input: "A\u0000hallo", expected: "Ahallo" },
+    { input: ["A\u0000hallo"], expected: ["Ahallo"] },
+    { input: { obj: ["A\u0000hallo"] }, expected: { obj: ["Ahallo"] } },
+  ].forEach(({ input, expected }) => {
+    it(`cleans events with null values ${JSON.stringify(
+      input,
+    )} ${JSON.stringify(expected)}`, () => {
+      const cleanedEvent = cleanEvent(input);
+      console.log(cleanedEvent);
+      expect(cleanedEvent).toStrictEqual(expected);
+    });
   });
 });

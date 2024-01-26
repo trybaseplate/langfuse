@@ -1,6 +1,8 @@
 import { createTRPCRouter, protectedProcedure } from "@/src/server/api/trpc";
 import * as z from "zod";
 import { throwIfNoAccess } from "@/src/features/rbac/utils/checkAccess";
+import { TRPCError } from "@trpc/server";
+import { projectNameSchema } from "@/src/features/auth/lib/projectNameSchema";
 
 export const projectsRouter = createTRPCRouter({
   all: protectedProcedure.query(async ({ ctx }) => {
@@ -20,6 +22,32 @@ export const projectsRouter = createTRPCRouter({
 
     return projects;
   }),
+  byId: protectedProcedure
+    .input(
+      z.object({
+        projectId: z.string(),
+      }),
+    )
+    .query(async ({ input, ctx }) => {
+      const project = await ctx.prisma.project.findUnique({
+        where: {
+          id: input.projectId,
+        },
+      });
+      if (!project) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const cloudConfigSchema = z.object({
+        plan: z.enum(["Hobby", "Pro", "Team", "Enterprise"]).optional(),
+        monthlyObservationLimit: z.number().int().positive().optional(),
+      });
+      const cloudConfig = cloudConfigSchema.safeParse(project.cloudConfig);
+
+      return {
+        ...project,
+        cloudConfig: cloudConfig.success ? cloudConfig.data : null,
+      };
+    }),
+
   create: protectedProcedure
     .input(
       z.object({
@@ -44,6 +72,31 @@ export const projectsRouter = createTRPCRouter({
         name: project.name,
         role: "OWNER",
       };
+    }),
+
+  update: protectedProcedure
+    .input(
+      z.object({
+        projectId: z.string(),
+        newName: projectNameSchema.shape.name,
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      throwIfNoAccess({
+        session: ctx.session,
+        projectId: input.projectId,
+        scope: "project:update",
+      });
+
+      await ctx.prisma.project.update({
+        where: {
+          id: input.projectId,
+        },
+        data: {
+          name: input.newName,
+        },
+      });
+      return true;
     }),
 
   delete: protectedProcedure

@@ -9,6 +9,12 @@ export const pruneDatabase = async () => {
   await prisma.score.deleteMany();
   await prisma.observation.deleteMany();
   await prisma.trace.deleteMany();
+  await prisma.datasetItem.deleteMany();
+  await prisma.dataset.deleteMany();
+  await prisma.datasetRuns.deleteMany();
+  await prisma.prompt.deleteMany();
+  await prisma.events.deleteMany();
+  await prisma.model.deleteMany();
 };
 
 export function createBasicAuthHeader(
@@ -24,7 +30,7 @@ export function createBasicAuthHeader(
 export async function makeAPICall(
   method: "POST" | "GET" | "PUT" | "DELETE" | "PATCH",
   url: string,
-  body: unknown,
+  body?: unknown,
 ) {
   const finalUrl = `http://localhost:3000/${url}`;
   const options = {
@@ -37,7 +43,9 @@ export async function makeAPICall(
         "sk-lf-1234567890",
       ),
     },
-    body: JSON.stringify(body),
+    // Conditionally include the body property if the method is not "GET"
+    ...(method !== "GET" &&
+      body !== undefined && { body: JSON.stringify(body) }),
   };
   const a = await fetch(finalUrl, options);
 

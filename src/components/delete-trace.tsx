@@ -1,6 +1,6 @@
 import { TrashIcon } from "lucide-react";
 import { useRouter } from "next/router";
-
+import { useState } from "react";
 import { Button } from "@/src/components/ui/button";
 import { api } from "@/src/utils/api";
 import {
@@ -9,6 +9,7 @@ import {
   PopoverTrigger,
 } from "@/src/components/ui/popover";
 import { useHasAccess } from "@/src/features/rbac/utils/checkAccess";
+import { usePostHog } from "posthog-js/react";
 
 export function DeleteTrace({
   traceId,
@@ -19,13 +20,16 @@ export function DeleteTrace({
   projectId: string;
   isTableAction?: boolean;
 }) {
+  const [isDeleted, setIsDeleted] = useState(false);
   const router = useRouter();
-  const utils = api.useContext();
+  const utils = api.useUtils();
+  const posthog = usePostHog();
 
   const hasAccess = useHasAccess({ projectId, scope: "traces:delete" });
 
-  const mutDeleteTrace = api.traces.delete.useMutation({
+  const mutDeleteTraces = api.traces.deleteMany.useMutation({
     onSuccess: () => {
+      setIsDeleted(true);
       if (!isTableAction) {
         void router
           .push(`/project/${projectId}/traces`)
@@ -41,14 +45,14 @@ export function DeleteTrace({
   }
 
   return (
-    <Popover>
+    <Popover key={traceId}>
       <PopoverTrigger asChild>
         {isTableAction ? (
           <Button variant="ghost" size="xs">
             <TrashIcon className="h-4 w-4" />
           </Button>
         ) : (
-          <Button variant="outline" type="button">
+          <Button variant="outline" type="button" size="icon">
             <TrashIcon className="h-4 w-4" />
           </Button>
         )}
@@ -63,10 +67,16 @@ export function DeleteTrace({
           <Button
             type="button"
             variant="destructive"
-            loading={mutDeleteTrace.isLoading}
-            onClick={() =>
-              void mutDeleteTrace.mutateAsync({ traceId, projectId })
-            }
+            loading={mutDeleteTraces.isLoading || isDeleted}
+            onClick={() => {
+              void mutDeleteTraces.mutateAsync({
+                traceIds: [traceId],
+                projectId,
+              });
+              posthog.capture("trace:delete", {
+                source: isTableAction ? "table-single-row" : "trace",
+              });
+            }}
           >
             Delete trace
           </Button>

@@ -1,12 +1,12 @@
-import { api } from "@/src/utils/api";
-import { type FilterState } from "@/src/features/filters/types";
-import { TotalMetric } from "./TotalMetric";
-import { compactNumberFormatter } from "@/src/utils/numbers";
-import { DashboardTable } from "@/src/features/dashboard/components/cards/DashboardTable";
-import { DashboardCard } from "@/src/features/dashboard/components/cards/DashboardCard";
-import { NoData } from "@/src/features/dashboard/components/NoData";
-import { RightAlignedCell } from "./RightAlignedCell";
 import DocPopup from "@/src/components/layouts/doc-popup";
+import { NoData } from "@/src/features/dashboard/components/NoData";
+import { DashboardCard } from "@/src/features/dashboard/components/cards/DashboardCard";
+import { DashboardTable } from "@/src/features/dashboard/components/cards/DashboardTable";
+import { type FilterState } from "@/src/features/filters/types";
+import { api } from "@/src/utils/api";
+import { compactNumberFormatter } from "@/src/utils/numbers";
+import { RightAlignedCell } from "./RightAlignedCell";
+import { TotalMetric } from "./TotalMetric";
 
 export const ScoresTable = ({
   className,
@@ -22,26 +22,35 @@ export const ScoresTable = ({
     column: "timestamp",
   }));
 
-  const metrics = api.dashboard.chart.useQuery({
-    projectId,
-    from: "traces_scores",
-    select: [
-      { column: "scoreName" },
-      { column: "scoreId", agg: "COUNT" },
-      { column: "value", agg: "AVG" },
-    ],
-    filter: localFilters ?? [],
-    groupBy: [{ type: "string", column: "scoreName" }],
-    orderBy: [{ column: "scoreId", direction: "DESC", agg: "COUNT" }],
-  });
-
-  const [zeroValueScores, oneValueScores] = [0, 1].map((i) =>
-    api.dashboard.chart.useQuery({
+  const metrics = api.dashboard.chart.useQuery(
+    {
       projectId,
       from: "traces_scores",
-      select: [{ column: "scoreName" }, { column: "scoreId", agg: "COUNT" }],
-      filter:
-        [
+      select: [
+        { column: "scoreName" },
+        { column: "scoreId", agg: "COUNT" },
+        { column: "value", agg: "AVG" },
+      ],
+      filter: localFilters,
+      groupBy: [{ type: "string", column: "scoreName" }],
+      orderBy: [{ column: "scoreId", direction: "DESC", agg: "COUNT" }],
+    },
+    {
+      trpc: {
+        context: {
+          skipBatch: true,
+        },
+      },
+    },
+  );
+
+  const [zeroValueScores, oneValueScores] = [0, 1].map((i) =>
+    api.dashboard.chart.useQuery(
+      {
+        projectId,
+        from: "traces_scores",
+        select: [{ column: "scoreName" }, { column: "scoreId", agg: "COUNT" }],
+        filter: [
           ...localFilters,
           {
             column: "value",
@@ -49,10 +58,18 @@ export const ScoresTable = ({
             value: i,
             type: "number",
           },
-        ] ?? [],
-      groupBy: [{ type: "string", column: "scoreName" }],
-      orderBy: [{ column: "scoreId", direction: "DESC", agg: "COUNT" }],
-    }),
+        ],
+        groupBy: [{ type: "string", column: "scoreName" }],
+        orderBy: [{ column: "scoreId", direction: "DESC", agg: "COUNT" }],
+      },
+      {
+        trpc: {
+          context: {
+            skipBatch: true,
+          },
+        },
+      },
+    ),
   );
 
   if (!zeroValueScores || !oneValueScores) {
@@ -111,33 +128,31 @@ export const ScoresTable = ({
       <DashboardTable
         headers={[
           "Name",
-          <RightAlignedCell key={0}>#</RightAlignedCell>,
-          <RightAlignedCell key={0}>Avg</RightAlignedCell>,
-          <RightAlignedCell key={0}>0</RightAlignedCell>,
-          <RightAlignedCell key={0}>1</RightAlignedCell>,
+          <RightAlignedCell key="count">#</RightAlignedCell>,
+          <RightAlignedCell key="average">Avg</RightAlignedCell>,
+          <RightAlignedCell key="zero">0</RightAlignedCell>,
+          <RightAlignedCell key="one">1</RightAlignedCell>,
         ]}
-        rows={
-          data.map((item, i) => [
-            item.scoreName,
-            <RightAlignedCell key={i}>
-              {compactNumberFormatter(item.countScoreId as number)}
-            </RightAlignedCell>,
-            <RightAlignedCell key={i}>
-              {compactNumberFormatter(item.avgValue)}
-            </RightAlignedCell>,
-            <RightAlignedCell key={i}>
-              {compactNumberFormatter(item.zeroValueScore as number)}
-            </RightAlignedCell>,
-            <RightAlignedCell key={i}>
-              {compactNumberFormatter(item.oneValueScore)}
-            </RightAlignedCell>,
-          ]) ?? []
-        }
+        rows={data.map((item, i) => [
+          item.scoreName,
+          <RightAlignedCell key={`${i}-count`}>
+            {compactNumberFormatter(item.countScoreId as number)}
+          </RightAlignedCell>,
+          <RightAlignedCell key={`${i}-average`}>
+            {compactNumberFormatter(item.avgValue)}
+          </RightAlignedCell>,
+          <RightAlignedCell key={`${i}-zero`}>
+            {compactNumberFormatter(item.zeroValueScore as number)}
+          </RightAlignedCell>,
+          <RightAlignedCell key={`${i}-one`}>
+            {compactNumberFormatter(item.oneValueScore)}
+          </RightAlignedCell>,
+        ])}
         collapse={{ collapsed: 5, expanded: 20 }}
         noDataChildren={
           <DocPopup
             description="Scores evaluate LLM quality and can be created manually or using the SDK."
-            link="https://langfuse.com/docs/scores"
+            href="https://langfuse.com/docs/scores"
           />
         }
         noDataClassName="mt-0"

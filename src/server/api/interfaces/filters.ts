@@ -2,11 +2,19 @@ import { z } from "zod";
 
 export const filterOperators = {
   datetime: [">", "<", ">=", "<="],
-  string: ["=", "contains", "starts with", "ends with"],
+  string: ["=", "contains", "does not contain", "starts with", "ends with"],
   stringOptions: ["any of", "none of"],
+  arrayOptions: ["any of", "none of", "all of"],
   number: ["=", ">", "<", ">=", "<="],
-  stringObject: ["=", "contains", "starts with", "ends with"],
+  stringObject: [
+    "=",
+    "contains",
+    "does not contain",
+    "starts with",
+    "ends with",
+  ],
   numberObject: ["=", ">", "<", ">=", "<="],
+  boolean: ["=", "<>"],
 } as const;
 
 export const timeFilter = z.object({
@@ -34,6 +42,12 @@ export const stringOptionsFilter = z.object({
   value: z.array(z.string()).refine((v) => v.length > 0),
   type: z.literal("stringOptions"),
 });
+export const arrayOptionsFilter = z.object({
+  column: z.string(),
+  operator: z.enum(filterOperators.arrayOptions),
+  value: z.array(z.string()).refine((v) => v.length > 0),
+  type: z.literal("arrayOptions"),
+});
 export const stringObjectFilter = z.object({
   type: z.literal("stringObject"),
   column: z.string(),
@@ -48,11 +62,19 @@ export const numberObjectFilter = z.object({
   operator: z.enum(filterOperators.number),
   value: z.number(),
 });
+export const booleanFilter = z.object({
+  type: z.literal("boolean"),
+  column: z.string(),
+  operator: z.enum(filterOperators.boolean),
+  value: z.boolean(),
+});
 export const singleFilter = z.discriminatedUnion("type", [
   timeFilter,
   stringFilter,
   numberFilter,
   stringOptionsFilter,
+  arrayOptionsFilter,
   stringObjectFilter,
   numberObjectFilter,
+  booleanFilter,
 ]);

@@ -1,46 +1,69 @@
 import { type Flag } from "@/src/features/feature-flags/types";
+import { type Scope } from "@/src/features/rbac/constants/roleAccessRights";
 import {
   Database,
   LayoutDashboard,
   LifeBuoy,
-  LineChart,
   ListTree,
   type LucideIcon,
   Settings,
-  TextSelect,
   UsersIcon,
+  PenSquareIcon,
 } from "lucide-react";
 
-export const ROUTES: Array<{
+export type Route = {
   name: string;
-  pathname: string;
-  icon: LucideIcon;
   featureFlag?: Flag;
-}> = [
+  label?: string;
+  rbacScope?: Scope;
+  icon?: LucideIcon; // ignored for nested routes
+  pathname?: string; // link, ignored if children
+  children?: Array<Route>; // folder
+};
+
+export const ROUTES: Route[] = [
   {
     name: "Dashboard",
     pathname: `/project/[projectId]`,
     icon: LayoutDashboard,
   },
   {
-    name: "Traces",
-    pathname: `/project/[projectId]/traces`,
+    name: "Tracing",
     icon: ListTree,
-  },
-  {
-    name: "Generations",
-    pathname: `/project/[projectId]/generations`,
-    icon: TextSelect,
-  },
-  {
-    name: "Scores",
-    pathname: `/project/[projectId]/scores`,
-    icon: LineChart,
+    children: [
+      {
+        name: "Traces",
+        pathname: `/project/[projectId]/traces`,
+      },
+      {
+        name: "Sessions",
+        pathname: `/project/[projectId]/sessions`,
+      },
+      {
+        name: "Generations",
+        pathname: `/project/[projectId]/generations`,
+      },
+      {
+        name: "Scores",
+        pathname: `/project/[projectId]/scores`,
+      },
+      {
+        name: "Models",
+        pathname: `/project/[projectId]/models`,
+      },
+    ],
   },
   {
     name: "Users",
     pathname: `/project/[projectId]/users`,
     icon: UsersIcon,
+  },
+  {
+    name: "Prompts",
+    pathname: "/project/[projectId]/prompts",
+    icon: PenSquareIcon,
+    label: "Beta",
+    rbacScope: "prompts:read",
   },
   {
     name: "Datasets",

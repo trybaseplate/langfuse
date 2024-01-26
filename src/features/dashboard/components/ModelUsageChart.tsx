@@ -30,33 +30,44 @@ export const ModelUsageChart = ({
   globalFilterState: FilterState;
   agg: DateTimeAggregationOption;
 }) => {
-  const tokens = api.dashboard.chart.useQuery({
-    projectId,
-    from: "observations",
-    select: [
-      { column: "totalTokens", agg: "SUM" },
-      { column: "totalTokenCost" },
-      { column: "model" },
-    ],
-    filter: globalFilterState ?? [],
-    groupBy: [
-      {
-        type: "datetime",
-        column: "startTime",
-        temporalUnit: dateTimeAggregationSettings[agg].date_trunc,
+  const tokens = api.dashboard.chart.useQuery(
+    {
+      projectId,
+      from: "observations",
+      select: [
+        { column: "totalTokens", agg: "SUM" },
+        { column: "calculatedTotalCost", agg: "SUM" },
+        { column: "model" },
+      ],
+      filter: globalFilterState,
+      groupBy: [
+        {
+          type: "datetime",
+          column: "startTime",
+          temporalUnit: dateTimeAggregationSettings[agg].date_trunc,
+        },
+        {
+          type: "string",
+          column: "model",
+        },
+      ],
+      orderBy: [
+        { column: "calculatedTotalCost", direction: "DESC", agg: "SUM" },
+      ],
+    },
+    {
+      trpc: {
+        context: {
+          skipBatch: true,
+        },
       },
-      {
-        type: "string",
-        column: "model",
-      },
-    ],
-    orderBy: [{ column: "totalTokenCost", direction: "DESC" }],
-  });
+    },
+  );
 
   const allModels = getAllModels(projectId, globalFilterState);
 
   const transformedTotalTokens =
-    tokens.data && allModels
+    tokens.data && allModels.length > 0
       ? fillMissingValuesAndTransform(
           extractTimeSeriesData(tokens.data, "startTime", [
             { labelColumn: "model", valueColumn: "sumTotalTokens" },
@@ -66,17 +77,20 @@ export const ModelUsageChart = ({
       : [];
 
   const transformedModelCost =
-    tokens.data && allModels
+    tokens.data && allModels.length > 0
       ? fillMissingValuesAndTransform(
           extractTimeSeriesData(tokens.data, "startTime", [
-            { labelColumn: "model", valueColumn: "totalTokenCost" },
+            {
+              labelColumn: "model",
+              valueColumn: "sumCalculatedTotalCost",
+            },
           ]),
           allModels,
         )
       : [];
 
   const totalCost = tokens.data?.reduce(
-    (acc, curr) => acc + (curr.totalTokenCost as number),
+    (acc, curr) => acc + (curr.sumCalculatedTotalCost as number),
     0,
   );
 
@@ -85,13 +99,19 @@ export const ModelUsageChart = ({
     0,
   );
 
+  // had to add this function as tremor under the hodd adds more variables
+  // to the function call which would break usdFormatter.
+  const oneValueUsdFormatter = (value: number) => {
+    return usdFormatter(value, 2, 2);
+  };
+
   const data = [
     {
       tabTitle: "Total cost",
       data: transformedModelCost,
-      totalMetric: totalCost ? usdFormatter(totalCost) : usdFormatter(0),
+      totalMetric: totalCost ? usdFormatter(totalCost, 2, 2) : usdFormatter(0),
       metricDescription: `Token cost`,
-      formatter: usdFormatter,
+      formatter: oneValueUsdFormatter,
     },
     {
       tabTitle: "Total tokens",
@@ -106,7 +126,7 @@ export const ModelUsageChart = ({
   return (
     <DashboardCard
       className={className}
-      title={"Model Usage"}
+      title="Model Usage"
       isLoading={tokens.isLoading}
     >
       <TabComponent

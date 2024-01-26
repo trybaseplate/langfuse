@@ -6,11 +6,16 @@ const config = {
   overrides: [
     {
       extends: [
-        "plugin:@typescript-eslint/recommended-requiring-type-checking",
+        "plugin:@typescript-eslint/recommended",
+        "plugin:@typescript-eslint/strict-type-checked",
       ],
       files: ["*.ts", "*.tsx"],
       parserOptions: {
         project: path.join(__dirname, "tsconfig.json"),
+      },
+      rules: {
+        "@typescript-eslint/no-non-null-assertion": "off",
+        "@typescript-eslint/no-confusing-void-expression": "off",
       },
     },
   ],
@@ -19,7 +24,8 @@ const config = {
     project: path.join(__dirname, "tsconfig.json"),
   },
   plugins: ["@typescript-eslint"],
-  extends: ["next/core-web-vitals", "plugin:@typescript-eslint/recommended"],
+  extends: ["next/core-web-vitals"],
+  ignorePatterns: ["generated/**/*"],
   rules: {
     "@typescript-eslint/consistent-type-imports": [
       "warn",
@@ -29,6 +35,12 @@ const config = {
       },
     ],
     "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_" }],
+    "react/jsx-key": [
+      "error",
+      {
+        warnOnDuplicates: true,
+      },
+    ],
   },
 };
 
