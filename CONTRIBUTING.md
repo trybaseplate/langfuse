@@ -2,22 +2,30 @@
 
 First off, thanks for taking the time to contribute! ❤️
 
-Langfuse is an open-source observability and analytics solution for LLM-based applications. We welcome contributions through GitHub pull requests. This document outlines our conventions regarding development workflow, commit message formatting, contact points, and other resources. Our goal is to simplify the process and ensure that your contributions are easily accepted.
+The best ways to contribute to Langfuse:
 
-We gratefully welcome improvements to documentation as well as to code.
+- Submit and vote on [Ideas](https://github.com/orgs/langfuse/discussions/categories/ideas)
+- Create and comment on [Issues](https://github.com/langfuse/langfuse/issues)
+- Open a PR.
+
+We welcome contributions through GitHub pull requests. This document outlines our conventions regarding development workflow, commit message formatting, contact points, and other resources. Our goal is to simplify the process and ensure that your contributions are easily accepted.
+
+We gratefully welcome improvements to documentation ([docs repo](https://github.com/langfuse/langfuse-docs)), the core application (this repo) and the SDKs ([Python](https://github.com/langfuse/langfuse-python), [JS](https://github.com/langfuse/langfuse-js)).
 
 The maintainers are available on [Discord](https://langfuse.com/discord) in case you have any questions.
 
-> And if you like the project, but just don't have time to contribute, that's fine. There are other easy ways to support the project and show your appreciation, which we would also be very happy about:
+> And if you like the project, but just don't have time to contribute code, that's fine. There are other easy ways to support the project and show your appreciation, which we would also be very happy about:
 >
 > - Star the project;
 > - Tweet about it;
 > - Refer to this project in your project's readme;
+> - Submit and vote on [Ideas](https://github.com/orgs/langfuse/discussions/categories/ideas);
+> - Create and comment on [Issues](https://github.com/langfuse/langfuse/issues);
 > - Mention the project at local meetups and tell your friends/colleagues.
 
 ## Making a change
 
-_Before making any significant changes, please [open an issue](https://github.com/langfuse/langfuse/issues)._ Discussing your proposed changes ahead of time will make the contribution process smooth for everyone.
+_Before making any significant changes, please [open an issue](https://github.com/langfuse/langfuse/issues)._ Discussing your proposed changes ahead of time will make the contribution process smooth for everyone. Large changes that were not discussed in an issue may be rejected.
 
 Once we've discussed your changes and you've got your code ready, make sure that tests are passing and open your pull request.
 
@@ -83,9 +91,9 @@ flowchart TB
 
 The diagram below may not show all relationships if the foreign key is not defined in the database schema. For instance, `trace_id` in the `observation` table is not defined as a foreign key to the `trace` table to allow unordered ingestion of these objects, but it is still a foreign key in the application code.
 
-Full database schema: [prisma/schema.prisma](prisma/schema.prisma)
+Full database schema: [web/prisma/schema.prisma](web/prisma/schema.prisma)
 
-<img src="./prisma/database.svg">
+<img src="./web/prisma/database.svg">
 
 ### Infrastructure & Network Overview
 
@@ -102,7 +110,14 @@ flowchart LR
    App --- DB
 ```
 
-## Development Setup
+## Repository Structure
+
+This repository contains the following packages:
+
+- `web`: is the main application package providing Frontend and Backend APIs for Langfuse
+- `worker` (no production yet): contains an application for asynchronous processing of tasks. This package is not yet used in production.
+
+## Development Setup (web package only)
 
 Requirements
 
@@ -112,25 +127,33 @@ Requirements
 **Steps**
 
 1. Fork the the repository and clone it locally
-2. Install dependencies
+2. Run the development database
 
    ```bash
-   npm install
+   npm run infra:dev:up
    ```
 
-3. Run the development database
-
-   ```bash
-   docker-compose -f docker-compose.dev.yml up -d
-   ```
-
-4. Create an env file
+3. Create an env file
 
    ```bash
     cp .env.dev.example .env
    ```
 
-5. Run the migrations
+4. CD into the web directory
+
+   ```bash
+   cd web
+   ```
+
+5. Install dependencies
+
+   ```bash
+   npm install
+   ```
+
+6. Run the migrations
+
+   The `schema.prisma` file is in the `web` directory and hence, migrations are applied from there.
 
    ```bash
    npm run db:migrate
@@ -140,7 +163,7 @@ Requirements
    # npm run db:seed:examples
    ```
 
-6. Start the development server
+7. Start the development server
 
    ```bash
     npm run dev
