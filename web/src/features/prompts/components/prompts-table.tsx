@@ -1,107 +1,289 @@
+import { LockIcon, PlusIcon } from "lucide-react";
+import Link from "next/link";
+import { useEffect } from "react";
+
 import { DataTable } from "@/src/components/table/data-table";
 import TableLink from "@/src/components/table/table-link";
 import { type LangfuseColumnDef } from "@/src/components/table/types";
 import { Button } from "@/src/components/ui/button";
 import { useDetailPageLists } from "@/src/features/navigate-detail-pages/context";
-import { CreatePromptDialog } from "@/src/features/prompts/components/new-prompt-button";
-import { useHasAccess } from "@/src/features/rbac/utils/checkAccess";
 import { DeletePrompt } from "@/src/features/prompts/components/delete-prompt";
-
+import { useHasAccess } from "@/src/features/rbac/utils/checkAccess";
+import useProjectIdFromURL from "@/src/hooks/useProjectIdFromURL";
 import { api } from "@/src/utils/api";
 import { type RouterOutput } from "@/src/utils/types";
-import { LockIcon, PlusIcon } from "lucide-react";
-import { useEffect } from "react";
+import { TagPromptPopover } from "@/src/features/tag/components/TagPromptPopover";
+import { DataTableToolbar } from "@/src/components/table/data-table-toolbar";
+import { useQueryFilterState } from "@/src/features/filters/hooks/useFilterState";
+import { useOrderByState } from "@/src/features/orderBy/hooks/useOrderByState";
+import { promptsTableColsWithOptions } from "@/src/server/api/definitions/promptsTable";
+import { NumberParam, useQueryParams, withDefault } from "use-query-params";
+import { createColumnHelper } from "@tanstack/react-table";
+import { usePostHogClientCapture } from "@/src/features/posthog-analytics/usePostHogClientCapture";
+import { joinTableCoreAndMetrics } from "@/src/components/table/utils/joinTableCoreAndMetrics";
+import { Skeleton } from "@/src/components/ui/skeleton";
+import { useTableDateRange } from "@/src/hooks/useTableDateRange";
+import { type FilterState } from "@langfuse/shared";
 
-type RowData = {
+type PromptTableRow = {
   name: string;
   version: number;
-  id: string;
   createdAt: Date;
-  isActive: boolean;
+  labels: string[];
+  type: string;
+  numberOfObservations: number;
+  tags: string[];
 };
 
-export function PromptTable(props: { projectId: string }) {
+export function PromptTable() {
+  const projectId = useProjectIdFromURL();
   const { setDetailPageList } = useDetailPageLists();
 
-  const prompts = api.prompts.all.useQuery({
-    projectId: props.projectId,
-  });
   const hasCUDAccess = useHasAccess({
-    projectId: props.projectId,
+    projectId,
     scope: "prompts:CUD",
   });
+
+  const [filterState, setFilterState] = useQueryFilterState([], "prompts");
+
+  const { selectedOption, dateRange, setDateRangeAndOption } =
+    useTableDateRange("All time");
+
+  const [orderByState, setOrderByState] = useOrderByState({
+    column: "createdAt",
+    order: "DESC",
+  });
+  const [paginationState, setPaginationState] = useQueryParams({
+    pageIndex: withDefault(NumberParam, 0),
+    pageSize: withDefault(NumberParam, 50),
+  });
+
+  const dateRangeFilter: FilterState = dateRange
+    ? [
+        {
+          column: "createdAt",
+          type: "datetime",
+          operator: ">=",
+          value: dateRange.from,
+        },
+      ]
+    : [];
+
+  const combinedFilterState = filterState.concat(dateRangeFilter);
+  const prompts = api.prompts.all.useQuery(
+    {
+      page: paginationState.pageIndex,
+      limit: paginationState.pageSize,
+      projectId: projectId as string, // Typecast as query is enabled only when projectId is present
+      filter: combinedFilterState,
+      orderBy: orderByState,
+    },
+    {
+      enabled: Boolean(projectId),
+      trpc: {
+        context: {
+          skipBatch: true,
+        },
+      },
+    },
+  );
+  const promptMetrics = api.prompts.metrics.useQuery(
+    {
+      projectId: projectId as string,
+      promptNames: prompts.data?.prompts.map((p) => p.name) ?? [],
+    },
+    {
+      enabled:
+        Boolean(projectId) && prompts.data && prompts.data.totalCount > 0,
+      trpc: {
+        context: {
+          skipBatch: true,
+        },
+      },
+    },
+  );
+  type CoreOutput = RouterOutput["prompts"]["all"]["prompts"][number];
+  type MetricsOutput = RouterOutput["prompts"]["metrics"][number];
+
+  type CoreType = Omit<CoreOutput, "name"> & { id: string };
+  type MetricType = Omit<MetricsOutput, "promptName"> & { id: string };
+
+  const promptsRowData = joinTableCoreAndMetrics<CoreType, MetricType>(
+    prompts.data?.prompts.map((p) => ({
+      ...p,
+      id: p.name,
+    })),
+    promptMetrics.data?.map((pm) => ({
+      ...pm,
+      id: pm.promptName,
+    })),
+  );
+
+  const promptFilterOptions = api.prompts.filterOptions.useQuery(
+    {
+      projectId: projectId as string,
+    },
+    {
+      trpc: {
+        context: {
+          skipBatch: true,
+        },
+      },
+    },
+  );
+  const filterOptionTags = promptFilterOptions.data?.tags ?? [];
+  const allTags = filterOptionTags.map((t) => t.value);
+  const capture = usePostHogClientCapture();
+  const totalCount = prompts.data?.totalCount ?? 0;
 
   useEffect(() => {
     if (prompts.isSuccess) {
       setDetailPageList(
         "prompts",
-        prompts.data.map((t) => encodeURIComponent(t.name)),
+        prompts.data.prompts.map((t) => t.name),
       );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prompts.isSuccess, prompts.data]);
 
-  const columns: LangfuseColumnDef<RowData>[] = [
-    {
-      accessorKey: "name",
+  const columnHelper = createColumnHelper<PromptTableRow>();
+  const promptColumns = [
+    columnHelper.accessor("name", {
       header: "Name",
-      cell: ({ row }) => {
-        const name: string = row.getValue("name");
+      id: "name",
+      enableSorting: true,
+      size: 250,
+      cell: (row) => {
+        const name = row.getValue();
         return name ? (
           <TableLink
-            path={`/project/${props.projectId}/prompts/${encodeURIComponent(name)}`}
+            path={`/project/${projectId}/prompts/${encodeURIComponent(name)}`}
             value={name}
-            truncateAt={30}
+            truncateAt={50}
           />
         ) : undefined;
       },
-    },
-    {
-      accessorKey: "version",
-      header: "Latest Version",
-      cell: ({ row }) => {
-        const version = row.getValue("version");
-        return version;
+    }),
+    columnHelper.accessor("version", {
+      header: "Versions",
+      id: "version",
+      enableSorting: true,
+      size: 70,
+      cell: (row) => {
+        return row.getValue();
       },
-    },
-    {
-      accessorKey: "createdAt",
+    }),
+    columnHelper.accessor("type", {
+      header: "Type",
+      id: "type",
+      enableSorting: true,
+      size: 60,
+      cell: (row) => {
+        return row.getValue();
+      },
+    }),
+    columnHelper.accessor("createdAt", {
       header: "Latest Version Created At",
-      cell: ({ row }) => {
-        const createdAt: Date = row.getValue("createdAt");
+      id: "createdAt",
+      enableSorting: true,
+      size: 200,
+      cell: (row) => {
+        const createdAt = row.getValue();
         return createdAt.toLocaleString();
       },
-    },
-    {
-      accessorKey: "actions",
-      header: "Actions",
-      cell: ({ row }) => {
+    }),
+    columnHelper.accessor("numberOfObservations", {
+      header: "Number of Generations",
+      size: 170,
+      cell: (row) => {
+        const numberOfObservations = row.getValue();
+        const name = row.row.original.name;
+        const filter = encodeURIComponent(
+          `promptName;stringOptions;;any of;${name}`,
+        );
+        if (!promptMetrics.isSuccess) {
+          return <Skeleton className="h-3 w-1/2" />;
+        }
         return (
-          <DeletePrompt
-            projectId={props.projectId}
-            promptName={row.getValue("name")}
+          <TableLink
+            path={`/project/${projectId}/generations?filter=${numberOfObservations ? filter : ""}`}
+            value={numberOfObservations.toLocaleString()}
           />
         );
       },
-    },
-  ];
-
-  const convertToTableRow = (
-    item: RouterOutput["prompts"]["all"][number],
-  ): RowData => {
-    return {
-      id: item.id,
-      name: item.name,
-      version: item.version,
-      createdAt: item.createdAt,
-      isActive: item.isActive,
-    };
-  };
+    }),
+    columnHelper.accessor("tags", {
+      header: "Tags",
+      id: "tags",
+      enableSorting: true,
+      size: 120,
+      cell: (row) => {
+        const tags = row.getValue();
+        const promptName: string = row.row.original.name;
+        return (
+          <TagPromptPopover
+            tags={tags}
+            availableTags={allTags}
+            projectId={projectId as string}
+            promptName={promptName}
+            promptsFilter={{
+              ...filterOptionTags,
+              projectId: projectId as string,
+              filter: combinedFilterState,
+              orderBy: orderByState,
+            }}
+          />
+        );
+      },
+      enableHiding: true,
+    }),
+    columnHelper.display({
+      id: "actions",
+      header: "Actions",
+      size: 70,
+      cell: (row) => {
+        const name = row.row.original.name;
+        return <DeletePrompt promptName={name} />;
+      },
+    }),
+  ] as LangfuseColumnDef<PromptTableRow>[];
 
   return (
     <div>
+      <DataTableToolbar
+        columns={promptColumns}
+        filterColumnDefinition={promptsTableColsWithOptions(
+          promptFilterOptions.data,
+        )}
+        filterState={filterState}
+        setFilterState={setFilterState}
+        selectedOption={selectedOption}
+        setDateRangeAndOption={setDateRangeAndOption}
+        actionButtons={
+          <Link href={`/project/${projectId}/prompts/new`}>
+            <Button
+              variant="secondary"
+              disabled={!hasCUDAccess}
+              aria-label="Create New Prompt"
+              onClick={() => {
+                capture("prompts:new_form_open");
+              }}
+            >
+              {hasCUDAccess ? (
+                <PlusIcon className="-ml-0.5 mr-1.5" aria-hidden="true" />
+              ) : (
+                <LockIcon
+                  className="-ml-0.5 mr-1.5 h-3 w-3"
+                  aria-hidden="true"
+                />
+              )}
+              New prompt
+            </Button>
+          </Link>
+        }
+      />
       <DataTable
-        columns={columns}
+        columns={promptColumns}
         data={
           prompts.isLoading
             ? { isLoading: true, isError: false }
@@ -114,25 +296,26 @@ export function PromptTable(props: { projectId: string }) {
               : {
                   isLoading: false,
                   isError: false,
-                  data: prompts.data.map((t) => convertToTableRow(t)),
+                  data: promptsRowData.rows?.map((item) => ({
+                    id: item.id,
+                    name: item.id, // was renamed to id to match the core and metrics
+                    version: item.version,
+                    createdAt: item.createdAt,
+                    type: item.type,
+                    labels: item.labels,
+                    numberOfObservations: Number(item.observationCount ?? 0),
+                    tags: item.tags,
+                  })),
                 }
         }
+        orderBy={orderByState}
+        setOrderBy={setOrderByState}
+        pagination={{
+          pageCount: Math.ceil(totalCount / paginationState.pageSize),
+          onChange: setPaginationState,
+          state: paginationState,
+        }}
       />
-      <CreatePromptDialog projectId={props.projectId} title="Create Prompt">
-        <Button
-          variant="secondary"
-          className="mt-4"
-          disabled={!hasCUDAccess}
-          aria-label="Promote Prompt to Production"
-        >
-          {hasCUDAccess ? (
-            <PlusIcon className="-ml-0.5 mr-1.5" aria-hidden="true" />
-          ) : (
-            <LockIcon className="-ml-0.5 mr-1.5 h-3 w-3" aria-hidden="true" />
-          )}
-          New prompt
-        </Button>
-      </CreatePromptDialog>
     </div>
   );
 }

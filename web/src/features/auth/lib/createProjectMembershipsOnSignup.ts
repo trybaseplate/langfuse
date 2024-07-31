@@ -1,5 +1,5 @@
 import { env } from "@/src/env.mjs";
-import { prisma } from "@/src/server/db";
+import { prisma } from "@langfuse/shared/src/db";
 
 export async function createProjectMembershipsOnSignup(user: {
   id: string;
@@ -17,7 +17,7 @@ export async function createProjectMembershipsOnSignup(user: {
         )?.id
       : undefined;
     if (demoProjectId !== undefined) {
-      await prisma.membership.create({
+      await prisma.projectMembership.create({
         data: {
           projectId: demoProjectId,
           userId: user.id,
@@ -37,7 +37,7 @@ export async function createProjectMembershipsOnSignup(user: {
         )?.id
       : undefined;
     if (defaultProjectID !== undefined) {
-      await prisma.membership.create({
+      await prisma.projectMembership.create({
         data: {
           projectId: defaultProjectID,
           userId: user.id,
@@ -69,7 +69,7 @@ async function processMembershipInvitations(email: string, userId: string) {
     });
 
     await prisma.$transaction([
-      prisma.membership.createMany({
+      prisma.projectMembership.createMany({
         data: membershipsData,
       }),
       prisma.membershipInvitation.deleteMany({

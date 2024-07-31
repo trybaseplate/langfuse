@@ -1,5 +1,4 @@
 import Header from "@/src/components/layouts/header";
-import { findClosestInterval } from "@/src/features/dashboard/lib/timeseries-aggregation";
 import { useRouter } from "next/router";
 import { GenerationLatencyChart } from "@/src/features/dashboard/components/LatencyChart";
 import { ChartScores } from "@/src/features/dashboard/components/ChartScores";
@@ -9,78 +8,34 @@ import { ScoresTable } from "@/src/features/dashboard/components/ScoresTable";
 import { ModelUsageChart } from "@/src/features/dashboard/components/ModelUsageChart";
 import { TracesTimeSeriesChart } from "@/src/features/dashboard/components/TracesTimeSeriesChart";
 import { UserChart } from "@/src/features/dashboard/components/UserChart";
-import {
-  type AvailableDateRangeSelections,
-  DEFAULT_DATE_RANGE_SELECTION,
-  DatePickerWithRange,
-} from "@/src/components/date-picker";
-import { addDays } from "date-fns";
-import {
-  NumberParam,
-  StringParam,
-  useQueryParams,
-  withDefault,
-} from "use-query-params";
-import { isValidOption } from "@/src/utils/types";
+import { DatePickerWithRange } from "@/src/components/date-picker";
 import { api } from "@/src/utils/api";
-import { usePostHog } from "posthog-js/react";
 import { FeedbackButtonWrapper } from "@/src/features/feedback/component/FeedbackButton";
 import { BarChart2 } from "lucide-react";
 import { Button } from "@/src/components/ui/button";
-import { FilterBuilder } from "@/src/features/filters/components/filter-builder";
-import { type FilterState } from "@/src/features/filters/types";
-import { type ColumnDefinition } from "@/src/server/api/interfaces/tableDefinition";
+import { PopoverFilterBuilder } from "@/src/features/filters/components/filter-builder";
+import { type FilterState } from "@langfuse/shared";
+import { type ColumnDefinition } from "@langfuse/shared";
 import { useQueryFilterState } from "@/src/features/filters/hooks/useFilterState";
 import { LatencyTables } from "@/src/features/dashboard/components/LatencyTables";
 import { useMemo } from "react";
 import { useSession } from "next-auth/react";
-
-export type DashboardDateRange = {
-  from: Date;
-  to: Date;
-};
+import { findClosestDashboardInterval } from "@/src/utils/date-range-utils";
+import { useDashboardDateRange } from "@/src/hooks/useDashboardDateRange";
 
 export default function Start() {
   const router = useRouter();
   const projectId = router.query.projectId as string;
-  const posthog = usePostHog();
+  const { selectedOption, dateRange, setDateRangeAndOption } =
+    useDashboardDateRange();
 
   const session = useSession();
+  const disableExpensiveDashboardComponents =
+    session.data?.environment.disableExpensivePostgresQueries ?? true;
+
   const project = session.data?.user?.projects.find(
     (project) => project.id === projectId,
   );
-
-  const memoizedDate = useMemo(() => new Date(), []);
-
-  const [urlParams, setUrlParams] = useQueryParams({
-    from: withDefault(NumberParam, addDays(memoizedDate, -7).getTime()),
-    to: withDefault(NumberParam, memoizedDate.getTime()),
-    select: withDefault(StringParam, "Select a date range"),
-  });
-
-  const dateRange = useMemo(
-    () =>
-      urlParams.from && urlParams.to
-        ? { from: new Date(urlParams.from), to: new Date(urlParams.to) }
-        : undefined,
-    [urlParams.from, urlParams.to],
-  );
-
-  const selectedOption = isValidOption(urlParams.select)
-    ? urlParams.select
-    : DEFAULT_DATE_RANGE_SELECTION;
-
-  const setDateRangeAndOption = (
-    option?: AvailableDateRangeSelections,
-    dateRange?: DashboardDateRange,
-  ) => {
-    posthog.capture("dashboard:date_range_changed");
-    setUrlParams({
-      select: option ? option.toString() : urlParams.select,
-      from: dateRange ? dateRange.from.getTime() : urlParams.from,
-      to: dateRange ? dateRange.to.getTime() : urlParams.to,
-    });
-  };
 
   const traceFilterOptions = api.traces.filterOptions.useQuery(
     {
@@ -94,21 +49,36 @@ export default function Start() {
       },
     },
   );
-  const values = traceFilterOptions.data?.name || [];
+  const nameOptions = traceFilterOptions.data?.name || [];
+  const tagsOptions = traceFilterOptions.data?.tags || [];
 
-  const traceName: ColumnDefinition[] = [
+  const filterColumns: ColumnDefinition[] = [
     {
-      name: "traceName",
-      type: "stringOptions" as const,
-      options: values,
+      name: "Trace Name",
+      id: "traceName",
+      type: "stringOptions",
+      options: nameOptions,
+      internal: "internalValue",
+    },
+    {
+      name: "Tags",
+      id: "tags",
+      type: "arrayOptions",
+      options: tagsOptions,
       internal: "internalValue",
     },
   ];
 
-  const [userFilterState, setUserFilterState] = useQueryFilterState([]);
+  const [userFilterState, setUserFilterState] = useQueryFilterState(
+    [],
+    "dashboard",
+  );
 
   const agg = useMemo(
-    () => (dateRange ? findClosestInterval(dateRange) ?? "7 days" : "7 days"),
+    () =>
+      dateRange
+        ? findClosestDashboardInterval(dateRange) ?? "7 days"
+        : "7 days",
     [dateRange],
   );
 
@@ -127,7 +97,20 @@ export default function Start() {
           value: dateRange.to,
         },
       ]
-    : [];
+    : [
+        {
+          type: "datetime" as const,
+          column: "startTime",
+          operator: ">" as const,
+          value: new Date(new Date().getTime() - 1000),
+        },
+        {
+          type: "datetime" as const,
+          column: "startTime",
+          operator: "<" as const,
+          value: new Date(),
+        },
+      ];
 
   const mergedFilterState: FilterState = [...userFilterState, ...timeFilter];
 
@@ -142,8 +125,8 @@ export default function Start() {
             selectedOption={selectedOption}
             className="my-0 max-w-full overflow-x-auto"
           />
-          <FilterBuilder
-            columns={traceName}
+          <PopoverFilterBuilder
+            columns={filterColumns}
             filterState={userFilterState}
             onChange={setUserFilterState}
           />
@@ -158,11 +141,11 @@ export default function Start() {
             id="date"
             variant={"outline"}
             className={
-              "group justify-start gap-x-3 text-left font-semibold text-gray-700 hover:bg-gray-50 hover:text-indigo-600"
+              "group justify-start gap-x-3 text-left font-semibold text-primary hover:bg-primary-foreground hover:text-primary-accent"
             }
           >
             <BarChart2
-              className="hidden h-6 w-6 shrink-0 text-gray-700 group-hover:text-indigo-600 lg:block"
+              className="hidden h-6 w-6 shrink-0 text-primary group-hover:text-primary-accent lg:block"
               aria-hidden="true"
             />
             Request Chart
@@ -175,11 +158,13 @@ export default function Start() {
           projectId={projectId}
           globalFilterState={mergedFilterState}
         />
-        <MetricTable
-          className="col-span-1 xl:col-span-2"
-          projectId={projectId}
-          globalFilterState={mergedFilterState}
-        />
+        {!disableExpensiveDashboardComponents && (
+          <MetricTable
+            className="col-span-1 xl:col-span-2"
+            projectId={projectId}
+            globalFilterState={mergedFilterState}
+          />
+        )}
         <ScoresTable
           className="col-span-1 xl:col-span-2"
           projectId={projectId}
@@ -191,34 +176,42 @@ export default function Start() {
           globalFilterState={mergedFilterState}
           agg={agg}
         />
-        <ModelUsageChart
-          className="col-span-1  min-h-24 xl:col-span-3"
-          projectId={projectId}
-          globalFilterState={mergedFilterState}
-          agg={agg}
-        />
-        <UserChart
-          className="col-span-1 xl:col-span-3"
-          projectId={projectId}
-          globalFilterState={mergedFilterState}
-          agg={agg}
-        />
+        {!disableExpensiveDashboardComponents && (
+          <ModelUsageChart
+            className="col-span-1  min-h-24 xl:col-span-3"
+            projectId={projectId}
+            globalFilterState={mergedFilterState}
+            agg={agg}
+          />
+        )}
+        {!disableExpensiveDashboardComponents && (
+          <UserChart
+            className="col-span-1 xl:col-span-3"
+            projectId={projectId}
+            globalFilterState={mergedFilterState}
+            agg={agg}
+          />
+        )}
         <ChartScores
           className="col-span-1 xl:col-span-3"
           agg={agg}
           projectId={projectId}
           globalFilterState={mergedFilterState}
         />
-        <LatencyTables
-          projectId={projectId}
-          globalFilterState={mergedFilterState}
-        />
-        <GenerationLatencyChart
-          className="col-span-1 flex-auto justify-between xl:col-span-full"
-          projectId={projectId}
-          agg={agg}
-          globalFilterState={mergedFilterState}
-        />
+        {!disableExpensiveDashboardComponents && (
+          <LatencyTables
+            projectId={projectId}
+            globalFilterState={mergedFilterState}
+          />
+        )}
+        {!disableExpensiveDashboardComponents && (
+          <GenerationLatencyChart
+            className="col-span-1 flex-auto justify-between lg:col-span-full"
+            projectId={projectId}
+            agg={agg}
+            globalFilterState={mergedFilterState}
+          />
+        )}
       </div>
     </div>
   );

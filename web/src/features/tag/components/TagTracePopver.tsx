@@ -3,22 +3,25 @@ import { api } from "@/src/utils/api";
 import { useHasAccess } from "@/src/features/rbac/utils/checkAccess";
 import { type RouterOutput, type RouterInput } from "@/src/utils/types";
 import TagManager from "@/src/features/tag/components/TagMananger";
+import { trpcErrorToast } from "@/src/utils/trpcErrorToast";
 
-type TagTracePopverProps = {
+type TagTracePopoverProps = {
   tags: string[];
   availableTags: string[];
   projectId: string;
   traceId: string;
   tracesFilter: RouterInput["traces"]["all"];
+  className?: string;
 };
 
-export function TagTracePopver({
+export function TagTracePopover({
   tags,
   availableTags,
   projectId,
   traceId,
   tracesFilter,
-}: TagTracePopverProps) {
+  className,
+}: TagTracePopoverProps) {
   const [isLoading, setIsLoading] = useState(false);
   const hasAccess = useHasAccess({ projectId, scope: "objects:tag" });
 
@@ -32,7 +35,7 @@ export function TagTracePopver({
     },
     onError: (err, _newTags, context) => {
       utils.traces.all.setData(tracesFilter, context?.prevTrace);
-      console.log("error", err);
+      trpcErrorToast(err);
       setIsLoading(false);
     },
     onSettled: (data, error, { traceId, tags }) => {
@@ -68,6 +71,7 @@ export function TagTracePopver({
       hasAccess={hasAccess}
       isLoading={isLoading}
       mutateTags={mutateTags}
+      className={className}
     />
   );
 }

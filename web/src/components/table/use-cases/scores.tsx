@@ -1,24 +1,42 @@
 import { DataTable } from "@/src/components/table/data-table";
+import { useRowHeightLocalStorage } from "@/src/components/table/data-table-row-height-switch";
 import { DataTableToolbar } from "@/src/components/table/data-table-toolbar";
 import TableLink from "@/src/components/table/table-link";
 import { type LangfuseColumnDef } from "@/src/components/table/types";
+import { IOTableCell } from "@/src/components/ui/CodeJsonViewer";
+import { Avatar, AvatarImage } from "@/src/components/ui/avatar";
 import useColumnVisibility from "@/src/features/column-visibility/hooks/useColumnVisibility";
 import { useQueryFilterState } from "@/src/features/filters/hooks/useFilterState";
+import { isNumericDataType } from "@/src/features/manual-scoring/lib/helpers";
 import { useOrderByState } from "@/src/features/orderBy/hooks/useOrderByState";
-import { scoresTableColsWithOptions } from "@/src/server/api/definitions/scoresTable";
+import { useTableDateRange } from "@/src/hooks/useTableDateRange";
+import {
+  type ScoreOptions,
+  scoresTableColsWithOptions,
+} from "@/src/server/api/definitions/scoresTable";
 import { api } from "@/src/utils/api";
-import { type RouterInput } from "@/src/utils/types";
-import { type Score } from "@prisma/client";
+import { isPresent } from "@/src/utils/typeChecks";
+import type { RouterOutput, RouterInput } from "@/src/utils/types";
+import type { FilterState, ScoreDataType } from "@langfuse/shared";
 import { useQueryParams, withDefault, NumberParam } from "use-query-params";
 
 export type ScoresTableRow = {
   id: string;
   traceId: string;
   timestamp: string;
+  source: string;
   name: string;
-  value: number;
+  dataType: ScoreDataType;
+  value: string;
+  author: {
+    image?: string;
+    name?: string;
+  };
   comment?: string;
   observationId?: string;
+  traceName?: string;
+  userId?: string;
+  jobConfigurationId?: string;
 };
 
 export type ScoreFilterInput = Omit<
@@ -26,29 +44,70 @@ export type ScoreFilterInput = Omit<
   "projectId" | "userId"
 >;
 
+function createFilterState(
+  userFilterState: FilterState,
+  omittedFilters: Record<string, string>[],
+): FilterState {
+  return omittedFilters.reduce((filterState, { key, value }) => {
+    return filterState.concat([
+      {
+        column: `${key}`,
+        type: "string",
+        operator: "=",
+        value: value,
+      },
+    ]);
+  }, userFilterState);
+}
+
 export default function ScoresTable({
   projectId,
   userId,
+  traceId,
+  observationId,
+  omittedFilter = [],
+  hiddenColumns = [],
+  tableColumnVisibilityName = "scoresColumnVisibility",
 }: {
   projectId: string;
   userId?: string;
+  traceId?: string;
+  observationId?: string;
+  omittedFilter?: string[];
+  hiddenColumns?: string[];
+  tableColumnVisibilityName?: string;
 }) {
   const [paginationState, setPaginationState] = useQueryParams({
     pageIndex: withDefault(NumberParam, 0),
     pageSize: withDefault(NumberParam, 50),
   });
 
-  const [userFilterState, setUserFilterState] = useQueryFilterState([]);
-  const filterState = userId
-    ? userFilterState.concat([
+  const [rowHeight, setRowHeight] = useRowHeightLocalStorage("scores", "s");
+  const { selectedOption, dateRange, setDateRangeAndOption } =
+    useTableDateRange();
+
+  const [userFilterState, setUserFilterState] = useQueryFilterState(
+    [],
+    "scores",
+  );
+
+  const dateRangeFilter: FilterState = dateRange
+    ? [
         {
-          column: "userId",
-          type: "string",
-          operator: "=",
-          value: userId,
+          column: "Timestamp",
+          type: "datetime",
+          operator: ">=",
+          value: dateRange.from,
         },
-      ])
-    : userFilterState;
+      ]
+    : [];
+
+  const combinedFilter = userFilterState.concat(dateRangeFilter);
+  const filterState = createFilterState(combinedFilter, [
+    ...(userId ? [{ key: "User ID", value: userId }] : []),
+    ...(traceId ? [{ key: "Trace ID", value: traceId }] : []),
+    ...(observationId ? [{ key: "Observation ID", value: observationId }] : []),
+  ]);
 
   const [orderByState, setOrderByState] = useOrderByState({
     column: "timestamp",
@@ -64,15 +123,27 @@ export default function ScoresTable({
   });
   const totalCount = scores.data?.totalCount ?? 0;
 
-  const filterOptions = api.scores.filterOptions.useQuery({
-    projectId,
-  });
+  const filterOptions = api.scores.filterOptions.useQuery(
+    {
+      projectId,
+    },
+    {
+      trpc: {
+        context: {
+          skipBatch: true,
+        },
+      },
+    },
+  );
 
-  const columns: LangfuseColumnDef<ScoresTableRow>[] = [
+  const rawColumns: LangfuseColumnDef<ScoresTableRow>[] = [
     {
       accessorKey: "traceId",
+      id: "traceId",
       enableColumnFilter: true,
-      header: "Trace ID",
+      header: "Trace",
+      enableSorting: true,
+      size: 100,
       cell: ({ row }) => {
         const value = row.getValue("traceId");
         return typeof value === "string" ? (
@@ -87,65 +158,226 @@ export default function ScoresTable({
     },
     {
       accessorKey: "observationId",
-      header: "Observation ID",
+      id: "observationId",
+      header: "Observation",
+      enableSorting: true,
+      size: 100,
       cell: ({ row }) => {
-        const observationId = row.getValue("observationId");
-        const traceId = row.getValue("traceId");
-        return typeof observationId === "string" &&
-          typeof traceId === "string" ? (
+        const observationId = row.getValue(
+          "observationId",
+        ) as ScoresTableRow["observationId"];
+        const traceId = row.getValue("traceId") as ScoresTableRow["traceId"];
+        return traceId && observationId ? (
           <TableLink
             path={`/project/${projectId}/traces/${traceId}?observation=${observationId}`}
             value={observationId}
           />
-        ) : null;
+        ) : undefined;
+      },
+    },
+    {
+      accessorKey: "traceName",
+      header: "Trace Name",
+      id: "traceName",
+      enableHiding: true,
+      enableSorting: true,
+      size: 150,
+      cell: ({ row }) => {
+        const value = row.getValue("traceName") as ScoresTableRow["traceName"];
+        const filter = encodeURIComponent(
+          `name;stringOptions;;any of;${value}`,
+        );
+        return value ? (
+          <TableLink
+            path={`/project/${projectId}/traces?filter=${value ? filter : ""}`}
+            value={value}
+            truncateAt={40}
+          />
+        ) : undefined;
+      },
+    },
+    {
+      accessorKey: "userId",
+      header: "User",
+      id: "userId",
+      headerTooltip: {
+        description: "The user ID associated with the trace.",
+        href: "https://langfuse.com/docs/tracing-features/users",
+      },
+      enableHiding: true,
+      enableSorting: true,
+      size: 100,
+      cell: ({ row }) => {
+        const value = row.getValue("userId");
+        return typeof value === "string" ? (
+          <>
+            <TableLink
+              path={`/project/${projectId}/users/${value}`}
+              value={value}
+              truncateAt={40}
+            />
+          </>
+        ) : undefined;
       },
     },
     {
       accessorKey: "timestamp",
       header: "Timestamp",
+      id: "timestamp",
       enableHiding: true,
+      enableSorting: true,
+      size: 150,
+    },
+    {
+      accessorKey: "source",
+      header: "Source",
+      id: "source",
+      enableHiding: true,
+      enableSorting: true,
+      size: 100,
     },
     {
       accessorKey: "name",
       header: "Name",
+      id: "name",
       enableHiding: true,
+      enableSorting: true,
+      size: 150,
+    },
+    {
+      accessorKey: "dataType",
+      header: "Data Type",
+      id: "dataType",
+      enableHiding: true,
+      enableSorting: true,
+      size: 100,
     },
     {
       accessorKey: "value",
       header: "Value",
+      id: "value",
       enableHiding: true,
+      enableSorting: true,
+      size: 100,
     },
     {
       accessorKey: "comment",
       header: "Comment",
+      id: "comment",
       enableHiding: true,
+      size: 400,
+      cell: ({ row }) => {
+        const value = row.getValue("comment") as ScoresTableRow["comment"];
+        return (
+          !!value && <IOTableCell data={value} singleLine={rowHeight === "s"} />
+        );
+      },
+    },
+    {
+      accessorKey: "author",
+      id: "author",
+      header: "Author",
+      enableHiding: true,
+      size: 150,
+      cell: ({ row }) => {
+        const { name, image } = row.getValue(
+          "author",
+        ) as ScoresTableRow["author"];
+        return (
+          <div className="flex items-center space-x-2">
+            <Avatar className="h-7 w-7">
+              <AvatarImage
+                src={image ?? undefined}
+                alt={name ?? "User Avatar"}
+              />
+            </Avatar>
+            <span>{name}</span>
+          </div>
+        );
+      },
+    },
+    {
+      accessorKey: "jobConfigurationId",
+      header: "Eval Configuration ID",
+      id: "jobConfigurationId",
+      headerTooltip: {
+        description: "The Job Configuration ID associated with the trace.",
+        href: "https://langfuse.com/docs/scores/model-based-evals",
+      },
+      enableHiding: true,
+      enableSorting: true,
+      size: 150,
+      cell: ({ row }) => {
+        const value = row.getValue("jobConfigurationId");
+        return typeof value === "string" ? (
+          <>
+            <TableLink
+              path={`/project/${projectId}/evals/configs/${value}`}
+              value={value}
+              truncateAt={40}
+            />
+          </>
+        ) : undefined;
+      },
     },
   ];
 
-  const [columnVisibility, setColumnVisibility] =
-    useColumnVisibility<ScoresTableRow>("scoresColumnVisibility", columns);
+  const columns = rawColumns.filter(
+    (c) => !!c.id && !hiddenColumns.includes(c.id),
+  );
 
-  const convertToTableRow = (score: Score): ScoresTableRow => {
+  const [columnVisibility, setColumnVisibility] =
+    useColumnVisibility<ScoresTableRow>(tableColumnVisibilityName, columns);
+
+  const convertToTableRow = (
+    score: RouterOutput["scores"]["all"]["scores"][0],
+  ): ScoresTableRow => {
     return {
       id: score.id,
       timestamp: score.timestamp.toLocaleString(),
+      source: score.source,
       name: score.name,
-      value: score.value,
+      dataType: score.dataType,
+      value:
+        isNumericDataType(score.dataType) && isPresent(score.value)
+          ? score.value % 1 === 0
+            ? String(score.value)
+            : score.value.toFixed(4)
+          : score.stringValue ?? "",
+      author: {
+        image: score.authorUserImage ?? undefined,
+        name: score.authorUserName ?? undefined,
+      },
       comment: score.comment ?? undefined,
       observationId: score.observationId ?? undefined,
       traceId: score.traceId,
+      traceName: score.traceName ?? undefined,
+      userId: score.traceUserId ?? undefined,
+      jobConfigurationId: score.jobConfigurationId ?? undefined,
     };
   };
 
+  const transformFilterOptions = (
+    traceFilterOptions: ScoreOptions | undefined,
+  ) => {
+    return scoresTableColsWithOptions(traceFilterOptions).filter(
+      (c) => !omittedFilter?.includes(c.name) && !hiddenColumns.includes(c.id),
+    );
+  };
+
   return (
-    <div>
+    <>
       <DataTableToolbar
         columns={columns}
-        filterColumnDefinition={scoresTableColsWithOptions(filterOptions.data)}
+        filterColumnDefinition={transformFilterOptions(filterOptions.data)}
         filterState={userFilterState}
         setFilterState={setUserFilterState}
         columnVisibility={columnVisibility}
         setColumnVisibility={setColumnVisibility}
+        rowHeight={rowHeight}
+        setRowHeight={setRowHeight}
+        selectedOption={selectedOption}
+        setDateRangeAndOption={setDateRangeAndOption}
       />
       <DataTable
         columns={columns}
@@ -173,7 +405,8 @@ export default function ScoresTable({
         setOrderBy={setOrderByState}
         columnVisibility={columnVisibility}
         onColumnVisibilityChange={setColumnVisibility}
+        rowHeight={rowHeight}
       />
-    </div>
+    </>
   );
 }

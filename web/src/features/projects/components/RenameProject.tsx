@@ -1,4 +1,4 @@
-import { Card } from "@tremor/react";
+import { Card } from "@/src/components/ui/card";
 import { Button } from "@/src/components/ui/button";
 import { Input } from "@/src/components/ui/input";
 import { api } from "@/src/utils/api";
@@ -15,8 +15,11 @@ import {
 } from "@/src/components/ui/form";
 import { useHasAccess } from "@/src/features/rbac/utils/checkAccess";
 import { projectNameSchema } from "@/src/features/auth/lib/projectNameSchema";
+import Header from "@/src/components/layouts/header";
+import { usePostHogClientCapture } from "@/src/features/posthog-analytics/usePostHogClientCapture";
 
 export default function RenameProject(props: { projectId: string }) {
+  const capture = usePostHogClientCapture();
   const utils = api.useUtils();
   const hasAccess = useHasAccess({
     projectId: props.projectId,
@@ -42,6 +45,7 @@ export default function RenameProject(props: { projectId: string }) {
   });
 
   function onSubmit(values: z.infer<typeof projectNameSchema>) {
+    capture("project_settings:rename_form_submit");
     renameProject
       .mutateAsync({
         projectId: props.projectId,
@@ -59,17 +63,15 @@ export default function RenameProject(props: { projectId: string }) {
 
   return (
     <div>
-      <h2 className="mb-5 text-base font-semibold leading-6 text-gray-900">
-        Project Name
-      </h2>
+      <Header title="Project Name" level="h3" />
       <Card className="mb-4 p-4">
         {form.getValues().name !== "" ? (
-          <p className="mb-4 text-sm text-gray-700">
+          <p className="mb-4 text-sm text-primary">
             Your Project will be renamed to &quot;
             <b>{form.watch().name}</b>&quot;.
           </p>
         ) : (
-          <p className="mb-4 text-sm text-gray-700" data-testid="project-name">
+          <p className="mb-4 text-sm text-primary" data-testid="project-name">
             Your Project is currently named &quot;<b>{projectName}</b>
             &quot;.
           </p>

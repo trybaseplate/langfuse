@@ -1,24 +1,22 @@
-import { type Transform } from "stream";
 import { z } from "zod";
 
 import { env } from "@/src/env.mjs";
-import {
-  exportFileFormats,
-  exportOptions,
-} from "@/src/server/api/interfaces/exportTypes";
-import { S3StorageService } from "@/src/server/api/services/S3StorageService";
+import { BatchExportFileFormat, exportOptions } from "@langfuse/shared";
+import { S3StorageService } from "@langfuse/shared/src/server";
 import { protectedProjectProcedure } from "@/src/server/api/trpc";
-import { type ObservationView } from "@prisma/client";
-
-import { DatabaseReadStream } from "../db/DatabaseReadStream";
-import { getAllGenerations as getAllGenerations } from "../db/getAllGenerationsSqlQuery";
+import { type ObservationView } from "@langfuse/shared/src/db";
+import {
+  DatabaseReadStream,
+  streamTransformations,
+} from "@langfuse/shared/src/server";
+import {
+  type FullObservations,
+  getAllGenerations as getAllGenerations,
+} from "../db/getAllGenerationsSqlQuery";
 import { GenerationTableOptions } from "../utils/GenerationTableOptions";
-import { transformStreamToCsv } from "./transforms/transformStreamToCsv";
-import { transformStreamToJson } from "./transforms/transformStreamToJson";
-import { transformStreamToJsonLines } from "./transforms/transformStreamToJsonLines";
 
 const generationsExportInput = GenerationTableOptions.extend({
-  fileFormat: z.enum(exportFileFormats),
+  fileFormat: z.nativeEnum(BatchExportFileFormat),
 });
 export type GenerationsExportInput = z.infer<typeof generationsExportInput>;
 export type GenerationsExportResult =
@@ -39,7 +37,7 @@ export const generationsExportQuery = protectedProjectProcedure
     const queryPageSize = env.DB_EXPORT_PAGE_SIZE ?? 1000;
 
     const dateCutoffFilter = {
-      column: "start_time",
+      column: "Start Time",
       operator: "<" as const,
       value: new Date(),
       type: "datetime" as const,
@@ -47,28 +45,20 @@ export const generationsExportQuery = protectedProjectProcedure
 
     const dbReadStream = new DatabaseReadStream<ObservationView>(
       async (pageSize: number, offset: number) => {
-        const dbReturn = await getAllGenerations({
+        const { generations } = await getAllGenerations({
           input: {
             ...input,
             filter: [...input.filter, dateCutoffFilter],
             page: offset / pageSize,
             limit: pageSize,
           },
-          selectIO: true,
+          selectIOAndMetadata: true, // selecting input/output and metadata
         });
-        return dbReturn.generations;
+        return generations as unknown as FullObservations;
       },
       queryPageSize,
     );
 
-    const streamTransformations: Record<
-      typeof input.fileFormat,
-      () => Transform
-    > = {
-      CSV: transformStreamToCsv,
-      JSON: transformStreamToJson,
-      "OPENAI-JSONL": transformStreamToJsonLines,
-    };
     const transformation = streamTransformations[input.fileFormat];
 
     const fileStream = dbReadStream.pipe(transformation());
@@ -76,11 +66,24 @@ export const generationsExportQuery = protectedProjectProcedure
     const fileExtension = exportOptions[input.fileFormat].extension;
     const fileName = `lf-export-${input.projectId}-${fileDate}.${fileExtension}`;
 
-    if (S3StorageService.getIsS3StorageConfigured(env)) {
-      const { signedUrl } = await new S3StorageService().uploadFile({
+    const accessKeyId = env.S3_ACCESS_KEY_ID;
+    const secretAccessKey = env.S3_SECRET_ACCESS_KEY;
+    const bucketName = env.S3_BUCKET_NAME;
+    const endpoint = env.S3_ENDPOINT;
+    const region = env.S3_REGION;
+
+    if (accessKeyId && secretAccessKey && bucketName && endpoint && region) {
+      const { signedUrl } = await new S3StorageService({
+        accessKeyId,
+        secretAccessKey,
+        bucketName,
+        endpoint,
+        region,
+      }).uploadFile({
         fileName,
         fileType: exportOptions[input.fileFormat].fileType,
         data: fileStream,
+        expiresInSeconds: 60 * 60, // 1 hour
       });
 
       return {

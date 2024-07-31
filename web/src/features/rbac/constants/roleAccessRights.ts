@@ -1,4 +1,4 @@
-import { type MembershipRole } from "@prisma/client";
+import { type ProjectRole } from "@langfuse/shared";
 
 const scopes = [
   "members:read",
@@ -17,9 +17,13 @@ const scopes = [
 
   "scores:CUD",
 
+  "scoreConfigs:CUD",
+  "scoreConfigs:read",
+
   "project:delete",
   "project:update",
   "project:transfer",
+  "integrations:CRUD",
 
   "datasets:CUD",
 
@@ -27,12 +31,24 @@ const scopes = [
   "prompts:read",
 
   "models:CUD",
+
+  "batchExport:create",
+
+  "evalTemplate:create",
+  "evalTemplate:read",
+  "evalJob:read",
+  "evalJob:CUD",
+  "evalJobExecution:read",
+
+  "llmApiKeys:read",
+  "llmApiKeys:create",
+  "llmApiKeys:delete",
 ] as const;
 
 // type string of all Resource:Action, e.g. "members:read"
 export type Scope = (typeof scopes)[number];
 
-export const roleAccessRights: Record<MembershipRole, Scope[]> = {
+export const roleAccessRights: Record<ProjectRole, Scope[]> = {
   OWNER: [
     "members:read",
     "members:create",
@@ -40,11 +56,14 @@ export const roleAccessRights: Record<MembershipRole, Scope[]> = {
     "apiKeys:read",
     "apiKeys:create",
     "apiKeys:delete",
+    "integrations:CRUD",
     "objects:publish",
     "objects:bookmark",
     "objects:tag",
     "traces:delete",
     "scores:CUD",
+    "scoreConfigs:CUD",
+    "scoreConfigs:read",
     "project:delete",
     "project:update",
     "project:transfer",
@@ -52,6 +71,15 @@ export const roleAccessRights: Record<MembershipRole, Scope[]> = {
     "prompts:CUD",
     "prompts:read",
     "models:CUD",
+    "evalTemplate:create",
+    "evalTemplate:read",
+    "evalJob:CUD",
+    "evalJob:read",
+    "evalJobExecution:read",
+    "llmApiKeys:read",
+    "llmApiKeys:create",
+    "llmApiKeys:delete",
+    "batchExport:create",
   ],
   ADMIN: [
     "project:update",
@@ -61,25 +89,54 @@ export const roleAccessRights: Record<MembershipRole, Scope[]> = {
     "apiKeys:read",
     "apiKeys:create",
     "apiKeys:delete",
+    "integrations:CRUD",
     "objects:publish",
     "objects:bookmark",
     "objects:tag",
     "traces:delete",
     "scores:CUD",
+    "scoreConfigs:CUD",
+    "scoreConfigs:read",
     "datasets:CUD",
     "prompts:CUD",
     "prompts:read",
     "models:CUD",
+    "evalTemplate:create",
+    "evalTemplate:read",
+    "evalJob:CUD",
+    "evalJob:read",
+    "evalJobExecution:read",
+    "llmApiKeys:read",
+    "llmApiKeys:create",
+    "llmApiKeys:delete",
+    "batchExport:create",
   ],
   MEMBER: [
     "members:read",
+    "apiKeys:read",
     "objects:publish",
     "objects:bookmark",
     "objects:tag",
     "scores:CUD",
+    "scoreConfigs:CUD",
+    "scoreConfigs:read",
     "datasets:CUD",
     "prompts:CUD",
     "prompts:read",
+    "evalTemplate:create",
+    "evalTemplate:read",
+    "evalJob:read",
+    "evalJob:CUD",
+    "evalJobExecution:read",
+    "llmApiKeys:read",
+    "batchExport:create",
   ],
-  VIEWER: ["prompts:read"],
+  VIEWER: [
+    "prompts:read",
+    "evalTemplate:read",
+    "scoreConfigs:read",
+    "evalJob:read",
+    "evalJobExecution:read",
+    "llmApiKeys:read",
+  ],
 };

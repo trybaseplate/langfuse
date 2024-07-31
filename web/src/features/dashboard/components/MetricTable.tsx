@@ -2,11 +2,13 @@ import DocPopup from "@/src/components/layouts/doc-popup";
 import { RightAlignedCell } from "@/src/features/dashboard/components/RightAlignedCell";
 import { DashboardCard } from "@/src/features/dashboard/components/cards/DashboardCard";
 import { DashboardTable } from "@/src/features/dashboard/components/cards/DashboardTable";
-import { type FilterState } from "@/src/features/filters/types";
+import { type FilterState } from "@langfuse/shared";
 import { api } from "@/src/utils/api";
 import { compactNumberFormatter } from "@/src/utils/numbers";
 import { TotalMetric } from "./TotalMetric";
 import { totalCostDashboardFormatted } from "@/src/features/dashboard/lib/dashboard-utils";
+
+import { env } from "@/src/env.mjs";
 
 export const MetricTable = ({
   className,
@@ -20,7 +22,9 @@ export const MetricTable = ({
   const metrics = api.dashboard.chart.useQuery(
     {
       projectId,
-      from: "traces_observationsview",
+      from: env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION // Langfuse Cloud has already completed the cost backfill job, thus cost can be pulled directly from obs. table
+        ? "traces_observations"
+        : "traces_observationsview",
       select: [
         { column: "calculatedTotalCost", agg: "SUM" },
         { column: "totalTokens", agg: "SUM" },

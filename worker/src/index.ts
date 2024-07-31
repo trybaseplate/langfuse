@@ -1,36 +1,36 @@
-import Fastify from "fastify";
-import consumer from "./redis-consumer";
+import "./instrumentation";
+import app from "./app";
+import { env } from "./env";
+import logger from "./logger";
 
-import { getLogger } from "./logger";
-import redis from "@fastify/redis";
-import { db } from "./database";
+import { evalJobCreator, evalJobExecutor } from "./queues/evalQueue";
+import { batchExportJobExecutor } from "./queues/batchExportQueue";
+import { setSigtermReceived } from "./features/health";
+import { redis } from "@langfuse/shared/src/server";
 
-const fastify = Fastify({
-  logger: getLogger("development") ?? true, // defaults to true if no entry matches in the map
+const server = app.listen(env.PORT, () => {
+  logger.info(`Listening: http://localhost:${env.PORT}`);
 });
 
-fastify.register(redis, {
-  host: process.env.REDIS_URL,
-  port: process.env.REDIS_PORT ? parseInt(process.env.REDIS_PORT) : 6379,
-  password: process.env.REDIS_AUTH,
-});
-fastify.register(consumer);
+// Function to handle shutdown logic
+async function onShutdown() {
+  logger.info("Shutting down application...");
+  setSigtermReceived();
 
-const start = async () => {
-  try {
-    // listen to 0.0.0.0 is required for docker
-    await fastify.listen({
-      port: process.env.PORT ? parseInt(process.env.PORT) : 3030,
-      host: "0.0.0.0",
-    });
-  } catch (err) {
-    fastify.log.error(err);
-    process.exit(1);
-  }
-};
+  // Stop accepting new connections
+  server.close();
+  logger.info("Server has been closed.");
+  // Perform necessary cleanup tasks here
+  // For example, close database connections, stop job executors, etc.
+  await Promise.all([
+    evalJobCreator?.close(),
+    evalJobExecutor?.close(),
+    batchExportJobExecutor?.close(),
+  ]);
+  redis?.disconnect();
+  logger.info("Http server and Redis jobs have been closed.");
+}
 
-start();
-
-fastify.get("/", async (request, reply) => {
-  return { hello: "world" };
-});
+// Capture shutdown signals
+process.on("SIGTERM", onShutdown);
+process.on("SIGINT", onShutdown);

@@ -18,6 +18,7 @@ import { useRouter } from "next/router";
 import posthog from "posthog-js";
 import { PostHogProvider } from "posthog-js/react";
 import { CrispWidget, chatSetUser } from "@/src/features/support-chat";
+import prexit from "prexit";
 
 // Custom polyfills not yet available in `next-core`:
 // https://github.com/vercel/next.js/issues/58242
@@ -29,6 +30,10 @@ import "core-js/features/array/to-sorted";
 // Other CSS
 import "react18-json-view/src/style.css";
 import { DetailPageListsProvider } from "@/src/features/navigate-detail-pages/context";
+import { env } from "@/src/env.mjs";
+import { ThemeProvider } from "@/src/features/theming/ThemeProvider";
+import { shutdown } from "@/src/utils/shutdown";
+import { MarkdownContextProvider } from "@/src/features/theming/useMarkdownContext";
 
 const setProjectInPosthog = () => {
   // project
@@ -51,10 +56,12 @@ if (
   setProjectInPosthog();
   posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY, {
     api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST || "https://eu.posthog.com",
+    ui_host: "https://eu.posthog.com",
     // Enable debug mode in development
     loaded: (posthog) => {
       if (process.env.NODE_ENV === "development") posthog.debug();
     },
+    autocapture: false,
   });
 }
 
@@ -66,10 +73,7 @@ const MyApp: AppType<{ session: Session | null }> = ({
 
   useEffect(() => {
     // PostHog (cloud.langfuse.com)
-    if (
-      process.env.NEXT_PUBLIC_POSTHOG_KEY &&
-      process.env.NEXT_PUBLIC_POSTHOG_HOST
-    ) {
+    if (env.NEXT_PUBLIC_POSTHOG_KEY && env.NEXT_PUBLIC_POSTHOG_HOST) {
       const handleRouteChange = () => {
         setProjectInPosthog();
         posthog.capture("$pageview");
@@ -87,12 +91,24 @@ const MyApp: AppType<{ session: Session | null }> = ({
     <QueryParamProvider adapter={NextAdapterPages}>
       <TooltipProvider>
         <PostHogProvider client={posthog}>
-          <SessionProvider session={session} refetchOnWindowFocus={true}>
+          <SessionProvider
+            session={session}
+            refetchOnWindowFocus={true}
+            refetchInterval={5 * 60} // 5 minutes
+          >
             <DetailPageListsProvider>
-              <Layout>
-                <Component {...pageProps} />
-                <UserTracking />
-              </Layout>
+              <MarkdownContextProvider>
+                <ThemeProvider
+                  attribute="class"
+                  enableSystem
+                  disableTransitionOnChange
+                >
+                  <Layout>
+                    <Component {...pageProps} />
+                    <UserTracking />
+                  </Layout>
+                </ThemeProvider>
+              </MarkdownContextProvider>
               <CrispWidget />
             </DetailPageListsProvider>
           </SessionProvider>
@@ -110,17 +126,14 @@ function UserTracking() {
   useEffect(() => {
     if (session.status === "authenticated") {
       // PostHog
-      if (
-        process.env.NEXT_PUBLIC_POSTHOG_KEY &&
-        process.env.NEXT_PUBLIC_POSTHOG_HOST
-      )
+      if (env.NEXT_PUBLIC_POSTHOG_KEY && env.NEXT_PUBLIC_POSTHOG_HOST)
         posthog.identify(session.data.user?.id ?? undefined, {
           environment: process.env.NODE_ENV,
           email: session.data.user?.email ?? undefined,
           name: session.data.user?.name ?? undefined,
           featureFlags: session.data.user?.featureFlags ?? undefined,
           projects: session.data.user?.projects ?? undefined,
-          LANGFUSE_CLOUD_REGION: process.env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION,
+          LANGFUSE_CLOUD_REGION: env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION,
         });
       const emailDomain = session.data.user?.email?.split("@")[1];
       if (emailDomain)
@@ -149,10 +162,7 @@ function UserTracking() {
       });
     } else {
       // PostHog
-      if (
-        process.env.NEXT_PUBLIC_POSTHOG_KEY &&
-        process.env.NEXT_PUBLIC_POSTHOG_HOST
-      ) {
+      if (env.NEXT_PUBLIC_POSTHOG_KEY && env.NEXT_PUBLIC_POSTHOG_HOST) {
         posthog.reset();
         posthog.resetGroups();
       }
@@ -161,4 +171,11 @@ function UserTracking() {
     }
   }, [session]);
   return null;
+}
+
+if (process.env.NEXT_MANUAL_SIG_HANDLE) {
+  prexit(async (signal) => {
+    console.log("Signal: ", signal);
+    return await shutdown(signal);
+  });
 }

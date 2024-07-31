@@ -1,4 +1,6 @@
+import { FullScreenPage } from "@/src/components/layouts/full-screen-page";
 import Header from "@/src/components/layouts/header";
+import { JSONView } from "@/src/components/ui/CodeJsonViewer";
 import { DatasetRunItemsTable } from "@/src/features/datasets/components/DatasetRunItemsTable";
 import { DetailPageNav } from "@/src/features/navigate-detail-pages/DetailPageNav";
 import { api } from "@/src/utils/api";
@@ -14,9 +16,14 @@ export default function Dataset() {
     datasetId,
     projectId,
   });
+  const run = api.datasets.runById.useQuery({
+    datasetId,
+    projectId,
+    runId,
+  });
 
   return (
-    <div>
+    <FullScreenPage>
       <Header
         title={`Dataset Run`}
         breadcrumb={[
@@ -25,7 +32,8 @@ export default function Dataset() {
             name: dataset.data?.name ?? datasetId,
             href: `/project/${projectId}/datasets/${datasetId}`,
           },
-          { name: "Run: " + runId },
+          { name: "Runs", href: `/project/${projectId}/datasets/${datasetId}` },
+          { name: run.data?.name ?? "" },
         ]}
         actionButtons={
           <DetailPageNav
@@ -37,11 +45,19 @@ export default function Dataset() {
           />
         }
       />
+      <div className="flex flex-col gap-2">
+        {!!run.data?.description && (
+          <JSONView json={run.data.description} title="Description" />
+        )}
+        {!!run.data?.metadata && (
+          <JSONView json={run.data.metadata} title="Metadata" />
+        )}
+      </div>
       <DatasetRunItemsTable
         projectId={projectId}
         datasetId={datasetId}
         datasetRunId={runId}
       />
-    </div>
+    </FullScreenPage>
   );
 }

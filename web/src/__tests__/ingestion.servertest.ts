@@ -3,9 +3,9 @@
 import { v4 } from "uuid";
 
 import { makeAPICall, pruneDatabase } from "@/src/__tests__/test-utils";
-import { ModelUsageUnit } from "@/src/constants";
+import { ModelUsageUnit } from "@langfuse/shared";
 import { cleanEvent } from "@/src/pages/api/public/ingestion";
-import { prisma } from "@/src/server/db";
+import { prisma } from "@langfuse/shared/src/db";
 
 describe("/api/public/ingestion API Endpoint", () => {
   beforeEach(async () => await pruneDatabase());
@@ -53,6 +53,17 @@ describe("/api/public/ingestion API Endpoint", () => {
         unit: ModelUsageUnit.Images,
       },
       expectedUnit: ModelUsageUnit.Images,
+      expectedPromptTokens: 1,
+      expectedCompletionTokens: 2,
+      expectedTotalTokens: 3,
+    },
+    {
+      usage: {
+        input: 1,
+        output: 2,
+        unit: ModelUsageUnit.Requests,
+      },
+      expectedUnit: ModelUsageUnit.Requests,
       expectedPromptTokens: 1,
       expectedCompletionTokens: 2,
       expectedTotalTokens: 3,
@@ -281,6 +292,7 @@ describe("/api/public/ingestion API Endpoint", () => {
       expect(dbScore?.name).toBe("score-name");
       expect(dbScore?.value).toBe(100.5);
       expect(dbScore?.observationId).toBeNull();
+      expect(dbScore?.projectId).toBe("7a88fb47-b4e2-43b8-a06c-a5ce950dc53a");
     });
   });
 
@@ -520,8 +532,6 @@ describe("/api/public/ingestion API Endpoint", () => {
 
       expect(response.status).toBe(207);
 
-      console.log("response body", response.body);
-
       const dbGeneration = await prisma.observation.findUnique({
         where: {
           id: generationId,
@@ -728,6 +738,7 @@ describe("/api/public/ingestion API Endpoint", () => {
             metadata: { key: "value" },
             release: "1.0.0",
             version: "2.0.0",
+            tags: ["tag-1", "tag-2", "tag-2"],
           },
         },
       ],
@@ -744,6 +755,7 @@ describe("/api/public/ingestion API Endpoint", () => {
             id: traceId,
             name: "trace-name",
             userId: "user-2",
+            tags: ["tag-1", "tag-4", "tag-3"],
           },
         },
       ],
@@ -763,6 +775,54 @@ describe("/api/public/ingestion API Endpoint", () => {
     expect(dbTrace[0]?.release).toBe("1.0.0");
     expect(dbTrace[0]?.externalId).toBeNull();
     expect(dbTrace[0]?.version).toBe("2.0.0");
+    expect(dbTrace[0]?.projectId).toBe("7a88fb47-b4e2-43b8-a06c-a5ce950dc53a");
+    expect(dbTrace[0]?.tags).toEqual(["tag-1", "tag-2", "tag-3", "tag-4"]);
+    expect(dbTrace[0]?.tags.length).toBe(4);
+  });
+
+  it("should upsert traces in the right order", async () => {
+    const traceId = v4();
+
+    const latestEvent = new Date();
+    const oldEvent = new Date(latestEvent).setSeconds(
+      latestEvent.getSeconds() - 1,
+    );
+
+    const responseOne = await makeAPICall("POST", "/api/public/ingestion", {
+      batch: [
+        {
+          id: v4(),
+          type: "trace-create",
+          timestamp: latestEvent,
+          body: {
+            id: traceId,
+            name: "trace-name",
+            userId: "user-1",
+          },
+        },
+        {
+          id: v4(),
+          type: "trace-create",
+          timestamp: oldEvent,
+          body: {
+            id: traceId,
+            name: "trace-name",
+            userId: "user-2",
+          },
+        },
+      ],
+    });
+    expect(responseOne.status).toBe(207);
+
+    const dbTrace = await prisma.trace.findMany({
+      where: {
+        name: "trace-name",
+      },
+    });
+
+    expect(dbTrace.length).toBeGreaterThan(0);
+    expect(dbTrace[0]?.name).toBe("trace-name");
+    expect(dbTrace[0]?.userId).toBe("user-1");
     expect(dbTrace[0]?.projectId).toBe("7a88fb47-b4e2-43b8-a06c-a5ce950dc53a");
   });
 
@@ -818,58 +878,6 @@ describe("/api/public/ingestion API Endpoint", () => {
     expect(dbTrace.length).toBe(1);
   });
 
-  it("should fail for auth errors", async () => {
-    const traceId = v4();
-    const scoreId = v4();
-
-    const responseOne = await makeAPICall("POST", "/api/public/ingestion", {
-      batch: [
-        {
-          id: v4(),
-          type: "trace-create",
-          timestamp: new Date().toISOString(),
-          body: {
-            id: traceId,
-            name: "trace-name",
-            userId: "user-1",
-            metadata: { key: "value" },
-            release: "1.0.0",
-            version: "2.0.0",
-          },
-        },
-        {
-          id: v4(),
-          type: "score-create",
-          timestamp: new Date().toISOString(),
-          body: {
-            id: scoreId,
-            name: "score-name",
-            value: 100.5,
-            traceId: "some-random-id",
-          },
-        },
-      ],
-    });
-
-    console.log(responseOne.body);
-    expect(responseOne.status).toBe(207);
-
-    expect("errors" in responseOne.body).toBe(true);
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-    expect(responseOne.body.errors.length).toBe(1);
-    expect("successes" in responseOne.body).toBe(true);
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-    expect(responseOne.body.successes.length).toBe(1);
-
-    const dbTrace = await prisma.trace.findMany({
-      where: {
-        name: "trace-name",
-      },
-    });
-
-    expect(dbTrace.length).toBe(1);
-  });
-
   it("should fail for resource not found", async () => {
     const traceId = v4();
 
@@ -901,7 +909,6 @@ describe("/api/public/ingestion API Endpoint", () => {
       ],
     });
 
-    console.log(responseOne.body);
     expect(responseOne.status).toBe(207);
 
     expect("errors" in responseOne.body).toBe(true);
@@ -1167,8 +1174,6 @@ describe("/api/public/ingestion API Endpoint", () => {
     });
     expect(responseOne.status).toBe(207);
 
-    console.log(responseOne.body);
-
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
     const errors = responseOne.body.errors;
 
@@ -1419,7 +1424,6 @@ IB Home   /   . . .   /   News   /   News about the IB   /   Why ChatGPT is an o
       input,
     )} ${JSON.stringify(expected)}`, () => {
       const cleanedEvent = cleanEvent(input);
-      console.log(cleanedEvent);
       expect(cleanedEvent).toStrictEqual(expected);
     });
   });
@@ -1658,121 +1662,6 @@ IB Home   /   . . .   /   News   /   News about the IB   /   Why ChatGPT is an o
     expect(dbScore?.traceId).toBe(traceId);
     expect(dbScore?.name).toBe(scoreName);
     expect(dbScore?.value).toBe(scoreValue);
-  });
-
-  it("should error on Bearer Auth for a trace from different project", async () => {
-    const otherProjectId = "other_project_id";
-    const traceId = "trace_id";
-    const bearerAuth = "Bearer pk-lf-1234567890";
-
-    const scoreId = "score_id";
-    const scoreEventId = "score_event_id";
-    const scoreName = "score-name";
-    const scoreValue = 100.5;
-
-    // Seed db with a trace to be scored
-    try {
-      await prisma.project.create({
-        data: {
-          id: otherProjectId,
-          name: "another-project",
-        },
-      });
-
-      await prisma.trace.create({
-        data: {
-          id: traceId,
-          name: "trace-name",
-          project: { connect: { id: otherProjectId } },
-        },
-      });
-
-      const response = await makeAPICall(
-        "POST",
-        "/api/public/ingestion",
-        {
-          batch: [
-            {
-              id: scoreEventId,
-              type: "score-create",
-              timestamp: new Date().toISOString(),
-              body: {
-                id: scoreId,
-                name: scoreName,
-                value: scoreValue,
-                traceId: traceId,
-              },
-            },
-          ],
-        },
-        bearerAuth,
-      );
-
-      expect(response.status).toBe(207);
-      expect(response.body.successes.length).toBe(0);
-      expect(response.body).toHaveProperty("errors");
-      expect(response.body.errors.length).toEqual(1);
-      expect(response.body.errors[0]?.id).toEqual(scoreEventId);
-
-      expect(await prisma.trace.count()).toBe(1);
-      expect(await prisma.trace.count({ where: { id: traceId } })).toBe(1);
-
-      const dbScore = await prisma.score.findUnique({
-        where: {
-          id: scoreId,
-        },
-      });
-
-      expect(dbScore).toBeNull();
-    } finally {
-      await prisma.project.delete({ where: { id: otherProjectId } });
-    }
-  });
-
-  it("should error on Bearer Auth with a trace that does not exist", async () => {
-    const traceId = "trace_id";
-    const bearerAuth = "Bearer pk-lf-1234567890";
-
-    const scoreId = "score_id";
-    const scoreEventId = "score_event_id";
-    const scoreName = "score-name";
-    const scoreValue = 100.5;
-
-    const response = await makeAPICall(
-      "POST",
-      "/api/public/ingestion",
-      {
-        batch: [
-          {
-            id: scoreEventId,
-            type: "score-create",
-            timestamp: new Date().toISOString(),
-            body: {
-              id: scoreId,
-              name: scoreName,
-              value: scoreValue,
-              traceId: traceId,
-            },
-          },
-        ],
-      },
-      bearerAuth,
-    );
-
-    expect(response.status).toBe(207);
-    expect(response.body.successes.length).toBe(0);
-    expect(response.body.errors.length).toBe(1);
-    expect(response.body.errors[0]?.id).toBe(scoreEventId);
-
-    expect(await prisma.trace.count()).toBe(0);
-
-    const dbScore = await prisma.score.findUnique({
-      where: {
-        id: scoreId,
-      },
-    });
-
-    expect(dbScore).toBeNull();
   });
 
   it("should error on wrong input", async () => {

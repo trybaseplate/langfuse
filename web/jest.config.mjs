@@ -16,6 +16,8 @@ const serverTestConfig = {
   displayName: "server",
   testMatch: ["/**/*.servertest.[jt]s?(x)"],
   testEnvironment: "jest-environment-node",
+  setupFilesAfterEnv: ["<rootDir>/src/__tests__/after-teardown.ts"],
+  globalTeardown: "<rootDir>/src/__tests__/teardown.ts",
 };
 
 // To avoid the "Cannot use import statement outside a module" errors while transforming ESM.
@@ -30,9 +32,15 @@ const config = {
     await createJestConfig(clientTestConfig)(),
     {
       ...(await createJestConfig(serverTestConfig)()),
-      transformIgnorePatterns: [`/node_modules/(?!(${esModules.join("|")})/)`],
+      transformIgnorePatterns: [
+        `/web/node_modules/(?!(${esModules.join("|")})/)`,
+      ],
     },
   ],
 };
+
+process.env = Object.assign(process.env, {
+  LANGFUSE_CACHE_API_KEY_ENABLED: "true",
+});
 
 export default config;

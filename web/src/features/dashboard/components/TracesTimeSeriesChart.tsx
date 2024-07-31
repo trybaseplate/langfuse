@@ -1,9 +1,5 @@
 import { api } from "@/src/utils/api";
-import {
-  dateTimeAggregationSettings,
-  type DateTimeAggregationOption,
-} from "@/src/features/dashboard/lib/timeseries-aggregation";
-import { type FilterState } from "@/src/features/filters/types";
+import { type FilterState } from "@langfuse/shared";
 import { DashboardCard } from "@/src/features/dashboard/components/cards/DashboardCard";
 import { BaseTimeSeriesChart } from "@/src/features/dashboard/components/BaseTimeSeriesChart";
 import { TotalMetric } from "@/src/features/dashboard/components/TotalMetric";
@@ -11,6 +7,10 @@ import { compactNumberFormatter } from "@/src/utils/numbers";
 import DocPopup from "@/src/components/layouts/doc-popup";
 import { isEmptyTimeSeries } from "@/src/features/dashboard/components/hooks";
 import { NoData } from "@/src/features/dashboard/components/NoData";
+import {
+  dashboardDateRangeAggregationSettings,
+  type DashboardDateRangeAggregationOption,
+} from "@/src/utils/date-range-utils";
 
 export const TracesTimeSeriesChart = ({
   className,
@@ -21,7 +21,7 @@ export const TracesTimeSeriesChart = ({
   className?: string;
   projectId: string;
   globalFilterState: FilterState;
-  agg: DateTimeAggregationOption;
+  agg: DashboardDateRangeAggregationOption;
 }) => {
   const traces = api.dashboard.chart.useQuery(
     {
@@ -35,7 +35,7 @@ export const TracesTimeSeriesChart = ({
         {
           type: "datetime",
           column: "timestamp",
-          temporalUnit: dateTimeAggregationSettings[agg].date_trunc,
+          temporalUnit: dashboardDateRangeAggregationSettings[agg].date_trunc,
         },
       ],
     },
@@ -94,7 +94,7 @@ export const TracesTimeSeriesChart = ({
         <NoData noDataText="No data available">
           <DocPopup
             description="Traces contain details about LLM applications and can be created using the SDK."
-            href="https://langfuse.com/docs/integrations/sdk#1-backend-tracing"
+            href="https://langfuse.com/docs/tracing"
           />
         </NoData>
       )}
